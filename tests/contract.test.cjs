@@ -44,6 +44,32 @@ test("createEndpoint dispatches a known command when authorized", async () => {
   ]);
 });
 
+test("createEndpoint accepts an injected tokenSource", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = {
+    "collections.list": async () => ({ collections: [] })
+  };
+  const Endpoint = bootstrap.createEndpoint(registry, {
+    tokenSource: () => "runtime-token"
+  });
+  const endpoint = new Endpoint();
+
+  const response = await endpoint.init({
+    headers: { "x-zotero-agent-token": "runtime-token" },
+    data: { command: "collections.list" }
+  });
+
+  assert.deepEqual(response, [
+    200,
+    { "Content-Type": "application/json" },
+    JSON.stringify({
+      ok: true,
+      command: "collections.list",
+      data: { collections: [] }
+    })
+  ]);
+});
+
 test("createEndpoint returns a not-found failure for unknown commands", async () => {
   const bootstrap = require("../plugin/bootstrap.js");
   const Endpoint = bootstrap.createEndpoint({}, { expectedToken: "real-token" });
@@ -62,6 +88,33 @@ test("createEndpoint returns a not-found failure for unknown commands", async ()
       error: {
         code: "NOT_FOUND",
         message: "Unknown command: missing.command",
+        details: {}
+      }
+    })
+  ]);
+});
+
+test("createEndpoint returns an auth failure when the token is missing", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = {
+    "collections.list": async () => ({ collections: [] })
+  };
+  const Endpoint = bootstrap.createEndpoint(registry, { expectedToken: "real-token" });
+  const endpoint = new Endpoint();
+
+  const response = await endpoint.init({
+    headers: {},
+    data: { command: "collections.list" }
+  });
+
+  assert.deepEqual(response, [
+    401,
+    { "Content-Type": "application/json" },
+    JSON.stringify({
+      ok: false,
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Missing or invalid token",
         details: {}
       }
     })
