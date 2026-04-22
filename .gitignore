@@ -3,3 +3,5 @@
 .local/
 builds/
 plugin/prefs.js
+example_attachment_read_text_output.json
+sample_attachment_extraction*.json

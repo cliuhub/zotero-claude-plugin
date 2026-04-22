@@ -12,6 +12,6 @@ This historical plan has been superseded by the live implementation in this repo
 
 ## Source Of Truth
 
-- Use [README.md](/Users/cliu/Documents/tasks/zotero/README.md) for current usage.
-- Use [skills/zotero-manage/SKILL.md](/Users/cliu/Documents/tasks/zotero/skills/zotero-manage/SKILL.md) for agent workflow.
-- Use [memory/state.md](/Users/cliu/Documents/tasks/zotero/memory/state.md) for current runtime status.
+- Use [README.md](../../../README.md) for current usage.
+- Use [skills/zotero-manage/SKILL.md](../../../skills/zotero-manage/SKILL.md) for agent workflow.
+- Use [memory/state.md](../../../memory/state.md) for current runtime status.

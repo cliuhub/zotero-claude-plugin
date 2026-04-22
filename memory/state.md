@@ -15,12 +15,12 @@
 - `npm run check:syntax` passes.
 - `npm run build:xpi` succeeds and rebuilds `builds/zotero-local-agent-management.xpi`.
 - Live repo CLI:
-- `attachments best-pdf --item-key 3ERS8CGS` returns `U2KPEST2`.
-- `items paper --key 3ERS8CGS` defaults to `requestedMode=auto` and actually used `mode=ocrmypdf-redo` for that older PDF.
+- `attachments best-pdf` resolves a real live PDF attachment from the library.
+- `items paper` defaults to `requestedMode=auto` and falls back to `mode=ocrmypdf-redo` when a live older PDF needs it.
 - `notes upsert` and `notes trash` succeed against live Zotero.
 - Live global CLI:
-- `~/.agents/bin/zotero items paper --key 3ERS8CGS` works.
-- `~/.agents/bin/zotero notes upsert` and `notes trash` work.
+- the installed global `zotero` command resolves papers correctly.
+- the installed global `zotero` command can create and trash notes.
 
 ## Runtime Note
 
