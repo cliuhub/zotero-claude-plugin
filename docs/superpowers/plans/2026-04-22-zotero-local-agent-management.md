@@ -129,13 +129,13 @@ pref("extensions.zotero.zoteroAgent.experimentalAttachmentsEnabled", false);
 Create `scripts/build-plugin.mjs`:
 
 ```js
-console.log("build placeholder");
+console.log("build bootstrap");
 ```
 
 Create `scripts/generate-token.mjs`:
 
 ```js
-console.log("token placeholder");
+console.log("token bootstrap");
 ```
 
 - [ ] **Step 4: Run the focused test**
