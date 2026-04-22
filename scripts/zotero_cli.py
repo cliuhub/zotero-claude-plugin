@@ -168,6 +168,21 @@ def filter_attachment_items(data):
     return attachments
 
 
+def parse_csv(value):
+    if value is None:
+        return []
+    return [entry.strip() for entry in value.split(",") if entry.strip()]
+
+
+def parse_json_object(value, field):
+    if value is None:
+        return {}
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{field} must decode to a JSON object")
+    return parsed
+
+
 def handle_collections_list(args):
     return fetch_read_json(
         args,
@@ -177,6 +192,36 @@ def handle_collections_list(args):
             "limit": args.limit,
             "start": args.start,
         },
+    )
+
+
+def handle_collections_create(args):
+    return plugin_command(
+        args,
+        "collections.create",
+        {
+            "name": args.name,
+            "parentCollectionKey": args.parent_key,
+        },
+    )
+
+
+def handle_collections_rename(args):
+    return plugin_command(
+        args,
+        "collections.rename",
+        {
+            "collectionKey": args.key,
+            "name": args.name,
+        },
+    )
+
+
+def handle_collections_trash(args):
+    return plugin_command(
+        args,
+        "collections.trash",
+        {"collectionKey": args.key},
     )
 
 
@@ -206,6 +251,172 @@ def handle_items_search(args):
             "q": args.query,
             "limit": args.limit,
             "start": args.start,
+        },
+    )
+
+
+def handle_items_create(args):
+    fields = parse_json_object(args.patch, "patch")
+    if args.title is not None:
+        fields["title"] = args.title
+    payload = {
+        "itemType": args.item_type,
+        "fields": fields,
+    }
+    collection_keys = parse_csv(args.collection_keys)
+    if collection_keys:
+        payload["collectionKeys"] = collection_keys
+    tags = parse_csv(args.tags)
+    if tags:
+        payload["tags"] = tags
+    return plugin_command(args, "items.create", payload)
+
+
+def handle_items_update(args):
+    return plugin_command(
+        args,
+        "items.update",
+        {
+            "itemKey": args.key,
+            "fields": parse_json_object(args.patch, "patch"),
+        },
+    )
+
+
+def handle_items_set_field(args):
+    return plugin_command(
+        args,
+        "items.setField",
+        {
+            "itemKey": args.key,
+            "field": args.field,
+            "value": args.value,
+        },
+    )
+
+
+def handle_items_trash(args):
+    return plugin_command(
+        args,
+        "items.trash",
+        {"itemKey": args.key},
+    )
+
+
+def handle_items_add_to_collection(args):
+    return plugin_command(
+        args,
+        "items.addToCollection",
+        {
+            "itemKey": args.key,
+            "collectionKey": args.collection_key,
+        },
+    )
+
+
+def handle_items_remove_from_collection(args):
+    return plugin_command(
+        args,
+        "items.removeFromCollection",
+        {
+            "itemKey": args.key,
+            "collectionKey": args.collection_key,
+        },
+    )
+
+
+def handle_items_move(args):
+    return plugin_command(
+        args,
+        "items.move",
+        {
+            "itemKey": args.key,
+            "collectionKey": args.collection_key,
+        },
+    )
+
+
+def handle_tags_add(args):
+    return plugin_command(
+        args,
+        "tags.add",
+        {
+            "itemKey": args.key,
+            "tag": args.tag,
+        },
+    )
+
+
+def handle_tags_remove(args):
+    return plugin_command(
+        args,
+        "tags.remove",
+        {
+            "itemKey": args.key,
+            "tag": args.tag,
+        },
+    )
+
+
+def handle_bulk_trash(args):
+    return plugin_command(
+        args,
+        "bulk.trashItems",
+        {"itemKeys": parse_csv(args.keys)},
+    )
+
+
+def handle_bulk_add_to_collection(args):
+    return plugin_command(
+        args,
+        "bulk.addToCollection",
+        {
+            "itemKeys": parse_csv(args.keys),
+            "collectionKey": args.collection_key,
+        },
+    )
+
+
+def handle_bulk_remove_from_collection(args):
+    return plugin_command(
+        args,
+        "bulk.removeFromCollection",
+        {
+            "itemKeys": parse_csv(args.keys),
+            "collectionKey": args.collection_key,
+        },
+    )
+
+
+def handle_bulk_move(args):
+    return plugin_command(
+        args,
+        "bulk.move",
+        {
+            "itemKeys": parse_csv(args.keys),
+            "collectionKey": args.collection_key,
+        },
+    )
+
+
+def handle_bulk_add_tag(args):
+    return plugin_command(
+        args,
+        "bulk.addTag",
+        {
+            "itemKeys": parse_csv(args.keys),
+            "tag": args.tag,
+        },
+    )
+
+
+def handle_bulk_remove_tag(args):
+    return plugin_command(
+        args,
+        "bulk.removeTag",
+        {
+            "itemKeys": parse_csv(args.keys),
+            "tag": args.tag,
         },
     )
 
@@ -282,7 +493,7 @@ def handle_attachments_open(args):
 def create_parser():
     parser = argparse.ArgumentParser(
         prog="zotero",
-        description="JSON-first Zotero CLI scaffold for local read commands.",
+        description="JSON-first Zotero CLI scaffold for local read and write commands.",
     )
     parser.add_argument(
         "--base-url",
@@ -314,6 +525,20 @@ def create_parser():
     collections_list_parser.add_argument("--start", type=int)
     collections_list_parser.set_defaults(handler=handle_collections_list)
 
+    collections_create_parser = collections_commands.add_parser("create")
+    collections_create_parser.add_argument("--name", required=True)
+    collections_create_parser.add_argument("--parent-key")
+    collections_create_parser.set_defaults(handler=handle_collections_create)
+
+    collections_rename_parser = collections_commands.add_parser("rename")
+    collections_rename_parser.add_argument("--key", required=True)
+    collections_rename_parser.add_argument("--name", required=True)
+    collections_rename_parser.set_defaults(handler=handle_collections_rename)
+
+    collections_trash_parser = collections_commands.add_parser("trash")
+    collections_trash_parser.add_argument("--key", required=True)
+    collections_trash_parser.set_defaults(handler=handle_collections_trash)
+
     items_parser = command_parsers.add_parser("items")
     items_commands = items_parser.add_subparsers(dest="action", required=True)
 
@@ -331,6 +556,89 @@ def create_parser():
     items_search_parser.add_argument("--limit", type=int)
     items_search_parser.add_argument("--start", type=int)
     items_search_parser.set_defaults(handler=handle_items_search)
+
+    items_create_parser = items_commands.add_parser("create")
+    items_create_parser.add_argument("--item-type", required=True)
+    items_create_parser.add_argument("--title")
+    items_create_parser.add_argument("--patch")
+    items_create_parser.add_argument("--collection-keys")
+    items_create_parser.add_argument("--tags")
+    items_create_parser.set_defaults(handler=handle_items_create)
+
+    items_update_parser = items_commands.add_parser("update")
+    items_update_parser.add_argument("--key", required=True)
+    items_update_parser.add_argument("--patch", required=True)
+    items_update_parser.set_defaults(handler=handle_items_update)
+
+    items_set_field_parser = items_commands.add_parser("set-field")
+    items_set_field_parser.add_argument("--key", required=True)
+    items_set_field_parser.add_argument("--field", required=True)
+    items_set_field_parser.add_argument("--value", required=True)
+    items_set_field_parser.set_defaults(handler=handle_items_set_field)
+
+    items_trash_parser = items_commands.add_parser("trash")
+    items_trash_parser.add_argument("--key", required=True)
+    items_trash_parser.set_defaults(handler=handle_items_trash)
+
+    items_add_to_collection_parser = items_commands.add_parser("add-to-collection")
+    items_add_to_collection_parser.add_argument("--key", required=True)
+    items_add_to_collection_parser.add_argument("--collection-key", required=True)
+    items_add_to_collection_parser.set_defaults(handler=handle_items_add_to_collection)
+
+    items_remove_from_collection_parser = items_commands.add_parser("remove-from-collection")
+    items_remove_from_collection_parser.add_argument("--key", required=True)
+    items_remove_from_collection_parser.add_argument("--collection-key", required=True)
+    items_remove_from_collection_parser.set_defaults(handler=handle_items_remove_from_collection)
+
+    items_move_parser = items_commands.add_parser("move")
+    items_move_parser.add_argument("--key", required=True)
+    items_move_parser.add_argument("--collection-key", required=True)
+    items_move_parser.set_defaults(handler=handle_items_move)
+
+    tags_parser = command_parsers.add_parser("tags")
+    tags_commands = tags_parser.add_subparsers(dest="action", required=True)
+
+    tags_add_parser = tags_commands.add_parser("add")
+    tags_add_parser.add_argument("--key", required=True)
+    tags_add_parser.add_argument("--tag", required=True)
+    tags_add_parser.set_defaults(handler=handle_tags_add)
+
+    tags_remove_parser = tags_commands.add_parser("remove")
+    tags_remove_parser.add_argument("--key", required=True)
+    tags_remove_parser.add_argument("--tag", required=True)
+    tags_remove_parser.set_defaults(handler=handle_tags_remove)
+
+    bulk_parser = command_parsers.add_parser("bulk")
+    bulk_commands = bulk_parser.add_subparsers(dest="action", required=True)
+
+    bulk_trash_parser = bulk_commands.add_parser("trash")
+    bulk_trash_parser.add_argument("--keys", required=True)
+    bulk_trash_parser.set_defaults(handler=handle_bulk_trash)
+
+    bulk_add_to_collection_parser = bulk_commands.add_parser("add-to-collection")
+    bulk_add_to_collection_parser.add_argument("--keys", required=True)
+    bulk_add_to_collection_parser.add_argument("--collection-key", required=True)
+    bulk_add_to_collection_parser.set_defaults(handler=handle_bulk_add_to_collection)
+
+    bulk_remove_from_collection_parser = bulk_commands.add_parser("remove-from-collection")
+    bulk_remove_from_collection_parser.add_argument("--keys", required=True)
+    bulk_remove_from_collection_parser.add_argument("--collection-key", required=True)
+    bulk_remove_from_collection_parser.set_defaults(handler=handle_bulk_remove_from_collection)
+
+    bulk_move_parser = bulk_commands.add_parser("move")
+    bulk_move_parser.add_argument("--keys", required=True)
+    bulk_move_parser.add_argument("--collection-key", required=True)
+    bulk_move_parser.set_defaults(handler=handle_bulk_move)
+
+    bulk_add_tag_parser = bulk_commands.add_parser("add-tag")
+    bulk_add_tag_parser.add_argument("--keys", required=True)
+    bulk_add_tag_parser.add_argument("--tag", required=True)
+    bulk_add_tag_parser.set_defaults(handler=handle_bulk_add_tag)
+
+    bulk_remove_tag_parser = bulk_commands.add_parser("remove-tag")
+    bulk_remove_tag_parser.add_argument("--keys", required=True)
+    bulk_remove_tag_parser.add_argument("--tag", required=True)
+    bulk_remove_tag_parser.set_defaults(handler=handle_bulk_remove_tag)
 
     attachments_parser = command_parsers.add_parser("attachments")
     attachments_commands = attachments_parser.add_subparsers(dest="action", required=True)
@@ -374,6 +682,9 @@ def main(argv=None):
         print_json(payload)
         if payload.get("ok", False):
             return 0
+        return 2
+    except ValueError as error:
+        print_json(error_payload("cli", "INVALID_INPUT", str(error)))
         return 2
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")

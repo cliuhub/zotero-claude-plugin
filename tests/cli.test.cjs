@@ -33,6 +33,8 @@ test("help output includes collections and items read commands", () => {
   assert.match(result.stdout, /collections/);
   assert.match(result.stdout, /items/);
   assert.match(result.stdout, /attachments/);
+  assert.match(result.stdout, /tags/);
+  assert.match(result.stdout, /bulk/);
 });
 
 test("attachments help includes stable retrieval commands", () => {
@@ -114,6 +116,129 @@ test("attachments path posts the plugin command with the auth token", async () =
         path: "/tmp/stored-paper.pdf"
       }
     });
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+test("items set-field posts the plugin command with JSON payload", async () => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      requests.push(JSON.parse(body));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        command: "items.setField",
+        data: {
+          itemKey: "ITEM123",
+          field: "DOI",
+          value: "10.1000/test"
+        }
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const result = await spawnResult(
+      "python3",
+      [
+        "scripts/zotero_cli.py",
+        "--base-url",
+        baseUrl,
+        "--token",
+        "real-token",
+        "items",
+        "set-field",
+        "--key",
+        "ITEM123",
+        "--field",
+        "DOI",
+        "--value",
+        "10.1000/test"
+      ],
+      { cwd: process.cwd(), encoding: "utf8" }
+    );
+
+    assert.equal(result.code, 0);
+    assert.deepEqual(requests, [{
+      command: "items.setField",
+      args: {
+        itemKey: "ITEM123",
+        field: "DOI",
+        value: "10.1000/test"
+      }
+    }]);
+    assert.equal(JSON.parse(result.stdout).command, "items.setField");
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+test("bulk trash parses comma-separated keys into an array", async () => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      requests.push(JSON.parse(body));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        command: "bulk.trashItems",
+        data: {
+          count: 2,
+          itemKeys: ["AAA111", "BBB222"]
+        }
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const result = await spawnResult(
+      "python3",
+      [
+        "scripts/zotero_cli.py",
+        "--base-url",
+        baseUrl,
+        "--token",
+        "real-token",
+        "bulk",
+        "trash",
+        "--keys",
+        "AAA111,BBB222"
+      ],
+      { cwd: process.cwd(), encoding: "utf8" }
+    );
+
+    assert.equal(result.code, 0);
+    assert.deepEqual(requests, [{
+      command: "bulk.trashItems",
+      args: {
+        itemKeys: ["AAA111", "BBB222"]
+      }
+    }]);
+    assert.equal(JSON.parse(result.stdout).command, "bulk.trashItems");
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

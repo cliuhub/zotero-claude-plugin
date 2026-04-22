@@ -176,6 +176,478 @@ function createAttachmentCommands(context) {
   };
 }
 
+function requireObject(value, field) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw commandError(400, "INVALID_INPUT", `${field} must be an object`, { field });
+  }
+  return value;
+}
+
+function normalizeStringList(value, field, options = {}) {
+  const rawValues = Array.isArray(value)
+    ? value
+    : value === undefined || value === null
+      ? []
+      : [value];
+  const normalized = rawValues.map((entry) => requireString(entry, field));
+  if (options.required && normalized.length === 0) {
+    throw commandError(400, "INVALID_INPUT", `${field} is required`, { field });
+  }
+  return Array.from(new Set(normalized));
+}
+
+async function saveEntity(entity) {
+  if (typeof entity?.saveTx === "function") {
+    return entity.saveTx();
+  }
+  if (typeof entity?.save === "function") {
+    return entity.save();
+  }
+  return entity?.id ?? null;
+}
+
+function getTagNames(item) {
+  if (typeof item?.getTags === "function") {
+    return item.getTags()
+      .map((entry) => typeof entry === "string" ? entry : entry?.tag)
+      .filter(Boolean);
+  }
+  if (Array.isArray(item?._tags)) {
+    return [...item._tags];
+  }
+  return [];
+}
+
+function serializeCollection(collection) {
+  return {
+    collectionKey: collection.key ?? null,
+    collectionID: collection.id ?? null,
+    name: collection.name ?? null,
+    parentCollectionKey: collection.parentKey ?? null,
+    deleted: !!collection.deleted
+  };
+}
+
+function serializeItem(item, extra = {}) {
+  const title = typeof item?.getField === "function"
+    ? item.getField("title")
+    : item?.title ?? null;
+  const collectionKeys = Array.isArray(item?.collectionKeys) ? [...item.collectionKeys] : [];
+  return {
+    itemKey: item?.key ?? null,
+    itemID: item?.id ?? null,
+    itemType: item?.itemType ?? null,
+    title,
+    collectionKeys,
+    tags: getTagNames(item),
+    deleted: !!item?.deleted,
+    ...extra
+  };
+}
+
+function normalizeError(error) {
+  if (error instanceof contract.CommandValidationError) {
+    return {
+      code: error.code,
+      message: error.message,
+      details: error.details
+    };
+  }
+  return {
+    code: "INTERNAL_ERROR",
+    message: error?.message || "Unknown error",
+    details: {}
+  };
+}
+
+async function resolveCollectionByKey(context, collectionKey) {
+  const key = requireString(collectionKey, "collectionKey");
+  if (typeof context.resolveCollectionByKey === "function") {
+    const collection = await context.resolveCollectionByKey(key);
+    if (collection) {
+      return collection;
+    }
+  }
+  const collections = context.collections || context.Zotero?.Collections;
+  if (collections && typeof collections.getByLibraryAndKey === "function") {
+    const collection = collections.getByLibraryAndKey(getUserLibraryID(context), key);
+    if (collection) {
+      return collection;
+    }
+  }
+  throw commandError(404, "NOT_FOUND", `Collection not found: ${key}`, { collectionKey: key });
+}
+
+async function resolveItemByKey(context, itemKey) {
+  const key = requireString(itemKey, "itemKey");
+  if (typeof context.resolveItemByKey === "function") {
+    const item = await context.resolveItemByKey(key);
+    if (item) {
+      return item;
+    }
+  }
+  const items = context.items || context.Zotero?.Items;
+  if (items && typeof items.getByLibraryAndKey === "function") {
+    const item = items.getByLibraryAndKey(getUserLibraryID(context), key);
+    if (item) {
+      return item;
+    }
+  }
+  throw commandError(404, "NOT_FOUND", `Item not found: ${key}`, { itemKey: key });
+}
+
+async function listCollections(context) {
+  if (typeof context.listCollections === "function") {
+    return context.listCollections();
+  }
+  const collections = context.collections || context.Zotero?.Collections;
+  if (collections && typeof collections.getByLibrary === "function") {
+    return collections.getByLibrary(getUserLibraryID(context), false, false);
+  }
+  return [];
+}
+
+function updateItemFields(item, fields) {
+  const nextFields = requireObject(fields, "fields");
+  if (typeof item.fromJSON === "function" && typeof item.toJSON === "function") {
+    item.fromJSON({
+      ...item.toJSON(),
+      ...nextFields
+    });
+    return;
+  }
+  for (const [field, value] of Object.entries(nextFields)) {
+    if (field === "itemType") {
+      item.itemType = value;
+      continue;
+    }
+    if (typeof item.setField === "function") {
+      item.setField(field, value);
+      continue;
+    }
+    item[field] = value;
+  }
+}
+
+async function setItemCollections(context, item, collectionKeys) {
+  const keys = normalizeStringList(collectionKeys, "collectionKeys");
+  if (keys.length === 0) {
+    item.collectionKeys = [];
+    if (typeof item.setCollections === "function") {
+      item.setCollections([]);
+    }
+    return;
+  }
+  const collections = [];
+  for (const key of keys) {
+    collections.push(await resolveCollectionByKey(context, key));
+  }
+  if (typeof item.setCollections === "function") {
+    item.setCollections(collections.map((collection) => collection.id));
+  }
+  item.collectionKeys = collections.map((collection) => collection.key ?? null).filter(Boolean);
+}
+
+async function addItemToCollection(context, item, collectionKey) {
+  const collection = await resolveCollectionByKey(context, collectionKey);
+  if (typeof item.addToCollection === "function") {
+    item.addToCollection(collection.id);
+  } else if (typeof item.getCollections === "function" && typeof item.setCollections === "function") {
+    const nextCollections = item.getCollections();
+    if (!nextCollections.includes(collection.id)) {
+      nextCollections.push(collection.id);
+      item.setCollections(nextCollections);
+    }
+  }
+  const nextKeys = new Set(Array.isArray(item.collectionKeys) ? item.collectionKeys : []);
+  nextKeys.add(collection.key);
+  item.collectionKeys = Array.from(nextKeys);
+  await saveEntity(item);
+  return serializeItem(item);
+}
+
+async function removeItemFromCollection(context, item, collectionKey) {
+  const collection = await resolveCollectionByKey(context, collectionKey);
+  if (typeof item.removeFromCollection === "function") {
+    item.removeFromCollection(collection.id);
+  } else if (typeof item.getCollections === "function" && typeof item.setCollections === "function") {
+    const nextCollections = item.getCollections().filter((value) => value !== collection.id);
+    item.setCollections(nextCollections);
+  }
+  item.collectionKeys = (Array.isArray(item.collectionKeys) ? item.collectionKeys : [])
+    .filter((value) => value !== collection.key);
+  await saveEntity(item);
+  return serializeItem(item);
+}
+
+async function moveItemToCollection(context, item, collectionKey) {
+  const collection = await resolveCollectionByKey(context, collectionKey);
+  if (typeof item.setCollections === "function") {
+    item.setCollections([collection.id]);
+  }
+  item.collectionKeys = [collection.key];
+  await saveEntity(item);
+  return serializeItem(item);
+}
+
+function addTagsToItem(item, tags) {
+  for (const tag of normalizeStringList(tags, "tags")) {
+    if (typeof item.addTag === "function") {
+      item.addTag(tag);
+    }
+  }
+}
+
+function removeTagsFromItem(item, tags) {
+  for (const tag of normalizeStringList(tags, "tags")) {
+    if (typeof item.removeTag === "function") {
+      item.removeTag(tag);
+    }
+  }
+}
+
+async function trashItems(context, items) {
+  if (typeof context.trashItems === "function") {
+    await context.trashItems(items.map((item) => item.id));
+    for (const item of items) {
+      item.deleted = true;
+    }
+    return;
+  }
+  if (context.Zotero?.Items && typeof context.Zotero.Items.trash === "function") {
+    await context.Zotero.Items.trash(items.map((item) => item.id));
+    return;
+  }
+  for (const item of items) {
+    item.deleted = true;
+  }
+}
+
+async function runBulk(itemKeys, operation) {
+  const keys = normalizeStringList(itemKeys, "itemKeys", { required: true });
+  const results = [];
+  for (const key of keys) {
+    try {
+      results.push({
+        itemKey: key,
+        ok: true,
+        data: await operation(key)
+      });
+    } catch (error) {
+      results.push({
+        itemKey: key,
+        ok: false,
+        error: normalizeError(error)
+      });
+    }
+  }
+  return {
+    count: keys.length,
+    itemKeys: keys,
+    results
+  };
+}
+
+function createCollectionCommands(context) {
+  return {
+    "collections.list": async function () {
+      const collections = await listCollections(context);
+      return {
+        collections: collections.map(serializeCollection)
+      };
+    },
+    "collections.create": async function (args = {}) {
+      const name = requireString(args.name, "name");
+      const parentCollectionKey = args.parentCollectionKey ? requireString(args.parentCollectionKey, "parentCollectionKey") : null;
+      let collection;
+      if (typeof context.createCollection === "function") {
+        collection = await context.createCollection({ name, parentCollectionKey });
+      } else if (typeof context.createCollectionObject === "function") {
+        collection = context.createCollectionObject();
+      } else if (context.Zotero?.Collection) {
+        collection = new context.Zotero.Collection();
+        collection.libraryID = getUserLibraryID(context);
+      } else {
+        throw commandError(500, "NOT_AVAILABLE", "Collection creation is not available");
+      }
+      if (!collection) {
+        throw commandError(500, "NOT_AVAILABLE", "Collection creation returned no collection");
+      }
+      if (collection.name === undefined || collection.name === null) {
+        collection.name = name;
+      } else {
+        collection.name = name;
+      }
+      if (parentCollectionKey) {
+        const parent = await resolveCollectionByKey(context, parentCollectionKey);
+        collection.parentKey = parent.key ?? parentCollectionKey;
+        if (parent.id !== undefined) {
+          collection.parentID = parent.id;
+        }
+      }
+      if (typeof context.createCollection !== "function") {
+        await saveEntity(collection);
+      }
+      return serializeCollection(collection);
+    },
+    "collections.rename": async function (args = {}) {
+      const collection = await resolveCollectionByKey(context, args.collectionKey);
+      collection.name = requireString(args.name, "name");
+      await saveEntity(collection);
+      return serializeCollection(collection);
+    },
+    "collections.trash": async function (args = {}) {
+      const collection = await resolveCollectionByKey(context, args.collectionKey);
+      collection.deleted = true;
+      if (!context.createCollectionObject && typeof context.trashCollection !== "function") {
+        await saveEntity(collection);
+      } else if (typeof context.trashCollection === "function") {
+        await context.trashCollection(collection);
+      }
+      return serializeCollection(collection);
+    }
+  };
+}
+
+function createItemCommands(context) {
+  return {
+    "items.create": async function (args = {}) {
+      const itemType = requireString(args.itemType, "itemType");
+      let item;
+      if (typeof context.createItem === "function") {
+        item = await context.createItem(args);
+      } else if (typeof context.createItemObject === "function") {
+        item = context.createItemObject(itemType);
+      } else if (context.Zotero?.Item) {
+        item = new context.Zotero.Item(itemType);
+        item.libraryID = getUserLibraryID(context);
+      } else {
+        throw commandError(500, "NOT_AVAILABLE", "Item creation is not available");
+      }
+      item.itemType = itemType;
+      updateItemFields(item, args.fields || {});
+      await setItemCollections(context, item, args.collectionKeys || []);
+      addTagsToItem(item, args.tags || []);
+      if (typeof context.createItem !== "function") {
+        await saveEntity(item);
+      }
+      return serializeItem(item);
+    },
+    "items.update": async function (args = {}) {
+      const item = await resolveItemByKey(context, args.itemKey);
+      updateItemFields(item, args.fields || args.patch || {});
+      await saveEntity(item);
+      return serializeItem(item);
+    },
+    "items.setField": async function (args = {}) {
+      const item = await resolveItemByKey(context, args.itemKey);
+      const field = requireString(args.field, "field");
+      if (typeof item.setField === "function") {
+        item.setField(field, args.value);
+      } else {
+        item[field] = args.value;
+      }
+      await saveEntity(item);
+      return {
+        ...serializeItem(item),
+        field
+      };
+    },
+    "items.trash": async function (args = {}) {
+      const item = await resolveItemByKey(context, args.itemKey);
+      await trashItems(context, [item]);
+      return serializeItem(item);
+    },
+    "items.addToCollection": async function (args = {}) {
+      const item = await resolveItemByKey(context, args.itemKey);
+      return addItemToCollection(context, item, args.collectionKey);
+    },
+    "items.removeFromCollection": async function (args = {}) {
+      const item = await resolveItemByKey(context, args.itemKey);
+      return removeItemFromCollection(context, item, args.collectionKey);
+    },
+    "items.move": async function (args = {}) {
+      const item = await resolveItemByKey(context, args.itemKey);
+      return moveItemToCollection(context, item, args.collectionKey);
+    }
+  };
+}
+
+function createTagCommands(context) {
+  return {
+    "tags.add": async function (args = {}) {
+      const item = await resolveItemByKey(context, args.itemKey);
+      addTagsToItem(item, [requireString(args.tag, "tag")]);
+      await saveEntity(item);
+      return {
+        itemKey: item.key ?? null,
+        tags: getTagNames(item)
+      };
+    },
+    "tags.remove": async function (args = {}) {
+      const item = await resolveItemByKey(context, args.itemKey);
+      removeTagsFromItem(item, [requireString(args.tag, "tag")]);
+      await saveEntity(item);
+      return {
+        itemKey: item.key ?? null,
+        tags: getTagNames(item)
+      };
+    }
+  };
+}
+
+function createBulkCommands(context) {
+  return {
+    "bulk.trashItems": async function (args = {}) {
+      return runBulk(args.itemKeys, async (itemKey) => {
+        const item = await resolveItemByKey(context, itemKey);
+        await trashItems(context, [item]);
+        return serializeItem(item);
+      });
+    },
+    "bulk.addToCollection": async function (args = {}) {
+      return runBulk(args.itemKeys, async (itemKey) => {
+        const item = await resolveItemByKey(context, itemKey);
+        return addItemToCollection(context, item, args.collectionKey);
+      });
+    },
+    "bulk.removeFromCollection": async function (args = {}) {
+      return runBulk(args.itemKeys, async (itemKey) => {
+        const item = await resolveItemByKey(context, itemKey);
+        return removeItemFromCollection(context, item, args.collectionKey);
+      });
+    },
+    "bulk.move": async function (args = {}) {
+      return runBulk(args.itemKeys, async (itemKey) => {
+        const item = await resolveItemByKey(context, itemKey);
+        return moveItemToCollection(context, item, args.collectionKey);
+      });
+    },
+    "bulk.addTag": async function (args = {}) {
+      return runBulk(args.itemKeys, async (itemKey) => {
+        const item = await resolveItemByKey(context, itemKey);
+        addTagsToItem(item, [requireString(args.tag, "tag")]);
+        await saveEntity(item);
+        return {
+          itemKey: item.key ?? null,
+          tags: getTagNames(item)
+        };
+      });
+    },
+    "bulk.removeTag": async function (args = {}) {
+      return runBulk(args.itemKeys, async (itemKey) => {
+        const item = await resolveItemByKey(context, itemKey);
+        removeTagsFromItem(item, [requireString(args.tag, "tag")]);
+        await saveEntity(item);
+        return {
+          itemKey: item.key ?? null,
+          tags: getTagNames(item)
+        };
+      });
+    }
+  };
+}
+
 function createCommandRegistry(context = {}) {
   return {
     "health.get": async function () {
@@ -186,9 +658,10 @@ function createCommandRegistry(context = {}) {
         experimentalAttachmentsEnabled: false
       };
     },
-    "collections.list": async function () {
-      return { collections: [] };
-    },
+    ...createCollectionCommands(context),
+    ...createItemCommands(context),
+    ...createTagCommands(context),
+    ...createBulkCommands(context),
     ...createAttachmentCommands(context)
   };
 }
