@@ -1,3 +1,2 @@
-pref("extensions.zotero.zoteroAgent.token", "__ZOTERO_AGENT_TOKEN__");
 pref("extensions.zotero.zoteroAgent.unsafeEnabled", false);
 pref("extensions.zotero.zoteroAgent.experimentalAttachmentsEnabled", false);

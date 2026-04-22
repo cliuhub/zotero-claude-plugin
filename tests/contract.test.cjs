@@ -35,6 +35,33 @@ function createCollection(overrides = {}) {
   return collection;
 }
 
+function createNote(overrides = {}) {
+  let noteHTML = overrides.noteHTML ?? "<p>Original note</p>";
+  const note = {
+    key: "NOTE123",
+    id: 66,
+    itemType: "note",
+    libraryID: 1,
+    parentItemID: 88,
+    parentKey: "ITEM123",
+    deleted: false,
+    saveCalls: 0,
+    isNote: () => true,
+    getNote() {
+      return noteHTML;
+    },
+    setNote(next) {
+      noteHTML = next;
+    },
+    saveTx: async function () {
+      this.saveCalls += 1;
+      return this.id;
+    },
+    ...overrides,
+  };
+  return note;
+}
+
 function createItem(overrides = {}) {
   const fields = { title: "Original Title", ...(overrides.fields || {}) };
   const collectionIDs = [...(overrides.collectionIDs || [])];
@@ -87,8 +114,16 @@ function createItem(overrides = {}) {
 test("package scripts include build and test commands", async () => {
   const pkg = require("../package.json");
   assert.equal(typeof pkg.scripts["build:xpi"], "string");
+  assert.equal(typeof pkg.scripts["install:source"], "string");
   assert.equal(typeof pkg.scripts.test, "string");
-  assert.equal(typeof pkg.scripts["make-token"], "string");
+});
+
+test("plugin manifest includes a Zotero addon id", async () => {
+  const manifest = require("../plugin/manifest.json");
+  assert.equal(typeof manifest.applications?.zotero?.id, "string");
+  assert.match(manifest.applications.zotero.id, /@/);
+  assert.equal(typeof manifest.applications.zotero.update_url, "string");
+  assert.match(manifest.applications.zotero.update_url, /^https:\/\//);
 });
 
 test("bootstrap exports a command registry with health and collections.list", async () => {
@@ -100,6 +135,16 @@ test("bootstrap exports a command registry with health and collections.list", as
   });
   assert.equal(typeof registry["health.get"], "function");
   assert.equal(typeof registry["collections.list"], "function");
+});
+
+test("health endpoint uses Zotero single-request signature", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  assert.equal(typeof bootstrap.createHealthEndpoint, "function");
+  const Endpoint = bootstrap.createHealthEndpoint({
+    "health.get": async () => ({ ok: true })
+  });
+  const endpoint = new Endpoint();
+  assert.equal(endpoint.init.length, 1);
 });
 
 test("bootstrap registry includes stable attachment retrieval commands", async () => {
@@ -114,7 +159,7 @@ test("bootstrap registry includes stable attachment retrieval commands", async (
   assert.equal(typeof registry["attachments.open"], "function");
 });
 
-test("bootstrap registry includes core write and bulk commands", async () => {
+test("bootstrap registry includes core write, note, and bulk commands", async () => {
   const bootstrap = require("../plugin/bootstrap.js");
   const registry = bootstrap.createCommandRegistry({
     Zotero: {},
@@ -130,6 +175,8 @@ test("bootstrap registry includes core write and bulk commands", async () => {
   assert.equal(typeof registry["items.addToCollection"], "function");
   assert.equal(typeof registry["items.removeFromCollection"], "function");
   assert.equal(typeof registry["items.move"], "function");
+  assert.equal(typeof registry["notes.upsert"], "function");
+  assert.equal(typeof registry["notes.trash"], "function");
   assert.equal(typeof registry["tags.add"], "function");
   assert.equal(typeof registry["tags.remove"], "function");
   assert.equal(typeof registry["bulk.trashItems"], "function");
@@ -354,6 +401,103 @@ test("item write commands update fields collections tags and trash state", async
   assert.equal(trashedResult.deleted, true);
 });
 
+test("items.create does not overwrite getter-only itemType on live Zotero items", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const createdItem = createItem({ key: "DOI123", id: 777, itemType: "conferencePaper" });
+  Object.defineProperty(createdItem, "itemType", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      return "conferencePaper";
+    }
+  });
+  const registry = bootstrap.createCommandRegistry({
+    createItemObject: (itemType) => {
+      assert.equal(itemType, "conferencePaper");
+      return createdItem;
+    }
+  });
+
+  const result = await registry["items.create"]({
+    itemType: "conferencePaper",
+    fields: {
+      title: "DOI Imported Title"
+    }
+  });
+
+  assert.equal(result.itemKey, "DOI123");
+  assert.equal(result.itemType, "conferencePaper");
+  assert.equal(createdItem._fields.title, "DOI Imported Title");
+});
+
+test("items.trash prefers Zotero.Items.trashTx for live runtime compatibility", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const item = createItem({ key: "TRASH1", id: 444 });
+  const calls = [];
+  const registry = bootstrap.createCommandRegistry({
+    Zotero: {
+      Items: {
+        trashTx: async (ids) => {
+          calls.push(ids);
+        }
+      }
+    },
+    resolveItemByKey: async (key) => key === "TRASH1" ? item : null
+  });
+
+  const result = await registry["items.trash"]({
+    itemKey: "TRASH1"
+  });
+
+  assert.deepEqual(calls, [[444]]);
+  assert.equal(result.deleted, true);
+});
+
+test("note commands create update and trash notes", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const parentItem = createItem({ key: "ITEM123", id: 88 });
+  const createdNote = createNote({ key: "NOTE999", id: 999, parentItemID: 88, parentKey: "ITEM123" });
+  const existingNote = createNote({ key: "NOTE123", id: 66, parentItemID: 88, parentKey: "ITEM123" });
+  const registry = bootstrap.createCommandRegistry({
+    createItemObject: (itemType) => {
+      assert.equal(itemType, "note");
+      return createdNote;
+    },
+    resolveItemByKey: async (key) => {
+      if (key === "ITEM123") {
+        return parentItem;
+      }
+      if (key === "NOTE123") {
+        return existingNote;
+      }
+      return null;
+    }
+  });
+
+  const createdResult = await registry["notes.upsert"]({
+    parentItemKey: "ITEM123",
+    note: "First paragraph\n\nSecond paragraph"
+  });
+  const updatedResult = await registry["notes.upsert"]({
+    noteKey: "NOTE123",
+    note: "<p>Updated note</p>"
+  });
+  const trashedResult = await registry["notes.trash"]({
+    noteKey: "NOTE123"
+  });
+
+  assert.match(createdNote.getNote(), /^<p>First paragraph<\/p><p>Second paragraph<\/p>$/);
+  assert.equal(createdNote.saveCalls, 1);
+  assert.equal(createdResult.noteKey, "NOTE999");
+  assert.equal(createdResult.parentItemKey, "ITEM123");
+  assert.equal(createdResult.title, "First paragraph Second paragraph");
+
+  assert.equal(existingNote.getNote(), "<p>Updated note</p>");
+  assert.equal(updatedResult.noteKey, "NOTE123");
+  assert.equal(updatedResult.noteText, "Updated note");
+  assert.equal(trashedResult.deleted, true);
+});
+
 test("tag and bulk commands mutate multiple resolved items", async () => {
   const bootstrap = require("../plugin/bootstrap.js");
   const homeCollection = createCollection({ key: "HOME1", id: 501, name: "Home" });
@@ -432,9 +576,12 @@ test("attachments.path resolves attachment metadata and file path", async () => 
     attachmentKey: "PDF123",
     itemID: 42,
     parentItemID: 7,
+    parentItemKey: null,
     title: "Stored PDF",
+    filename: null,
     contentType: "application/pdf",
     linkMode: 1,
+    deleted: false,
     path: "/tmp/stored-paper.pdf"
   });
 });
@@ -498,22 +645,21 @@ test("attachments.open delegates to the configured open helper", async () => {
   assert.equal(result.path, "/tmp/stored-paper.pdf");
 });
 
-test("createEndpoint dispatches a known command when authorized", async () => {
+test("createEndpoint dispatches a known command directly", async () => {
   const bootstrap = require("../plugin/bootstrap.js");
   const registry = {
     "collections.list": async (args) => ({ received: args })
   };
-  const Endpoint = bootstrap.createEndpoint(registry, { expectedToken: "real-token" });
+  const Endpoint = bootstrap.createEndpoint(registry);
   const endpoint = new Endpoint();
 
   const response = await endpoint.init({
-    headers: { "x-zotero-agent-token": "real-token" },
     data: { command: "collections.list", args: { limit: 5 } }
   });
 
   assert.deepEqual(response, [
     200,
-    { "Content-Type": "application/json" },
+    "application/json",
     JSON.stringify({
       ok: true,
       command: "collections.list",
@@ -522,45 +668,18 @@ test("createEndpoint dispatches a known command when authorized", async () => {
   ]);
 });
 
-test("createEndpoint accepts an injected tokenSource", async () => {
-  const bootstrap = require("../plugin/bootstrap.js");
-  const registry = {
-    "collections.list": async () => ({ collections: [] })
-  };
-  const Endpoint = bootstrap.createEndpoint(registry, {
-    tokenSource: () => "runtime-token"
-  });
-  const endpoint = new Endpoint();
-
-  const response = await endpoint.init({
-    headers: { "x-zotero-agent-token": "runtime-token" },
-    data: { command: "collections.list" }
-  });
-
-  assert.deepEqual(response, [
-    200,
-    { "Content-Type": "application/json" },
-    JSON.stringify({
-      ok: true,
-      command: "collections.list",
-      data: { collections: [] }
-    })
-  ]);
-});
-
 test("createEndpoint returns a not-found failure for unknown commands", async () => {
   const bootstrap = require("../plugin/bootstrap.js");
-  const Endpoint = bootstrap.createEndpoint({}, { expectedToken: "real-token" });
+  const Endpoint = bootstrap.createEndpoint({});
   const endpoint = new Endpoint();
 
   const response = await endpoint.init({
-    headers: { "x-zotero-agent-token": "real-token" },
     data: { command: "missing.command" }
   });
 
   assert.deepEqual(response, [
     404,
-    { "Content-Type": "application/json" },
+    "application/json",
     JSON.stringify({
       ok: false,
       error: {
@@ -572,47 +691,19 @@ test("createEndpoint returns a not-found failure for unknown commands", async ()
   ]);
 });
 
-test("createEndpoint returns an auth failure when the token is missing", async () => {
-  const bootstrap = require("../plugin/bootstrap.js");
-  const registry = {
-    "collections.list": async () => ({ collections: [] })
-  };
-  const Endpoint = bootstrap.createEndpoint(registry, { expectedToken: "real-token" });
-  const endpoint = new Endpoint();
-
-  const response = await endpoint.init({
-    headers: {},
-    data: { command: "collections.list" }
-  });
-
-  assert.deepEqual(response, [
-    401,
-    { "Content-Type": "application/json" },
-    JSON.stringify({
-      ok: false,
-      error: {
-        code: "AUTH_REQUIRED",
-        message: "Missing or invalid token",
-        details: {}
-      }
-    })
-  ]);
-});
-
 test("createEndpoint rejects prototype-name commands instead of dispatching them", async () => {
   const bootstrap = require("../plugin/bootstrap.js");
   const registry = {};
-  const Endpoint = bootstrap.createEndpoint(registry, { expectedToken: "real-token" });
+  const Endpoint = bootstrap.createEndpoint(registry);
   const endpoint = new Endpoint();
 
   const response = await endpoint.init({
-    headers: { "x-zotero-agent-token": "real-token" },
     data: { command: "constructor", args: { limit: 5 } }
   });
 
   assert.deepEqual(response, [
     404,
-    { "Content-Type": "application/json" },
+    "application/json",
     JSON.stringify({
       ok: false,
       error: {
@@ -624,36 +715,6 @@ test("createEndpoint rejects prototype-name commands instead of dispatching them
   ]);
 });
 
-test("authorize accepts the configured token", () => {
-  assert.doesNotThrow(() => {
-    contract.authorizeHeaders({ "x-zotero-agent-token": "secret" }, "secret");
-  });
-});
-
-test("authorize accepts differently cased header keys", () => {
-  assert.doesNotThrow(() => {
-    contract.authorizeHeaders({ "X-Zotero-Agent-Token": "secret" }, "secret");
-    contract.authorizeHeaders({ "X-ZOTERO-AGENT-TOKEN": "secret" }, "secret");
-  });
-});
-
-test("authorize accepts Headers-like inputs and rejects invalid tokens", () => {
-  const headers = new Map([["x-zotero-agent-token", "secret"]]);
-  headers.get = Map.prototype.get;
-  headers.has = Map.prototype.has;
-  assert.doesNotThrow(() => {
-    contract.authorizeHeaders(headers, "secret");
-  });
-  assert.throws(
-    () => contract.authorizeHeaders({}, "secret"),
-    (error) => error.code === "AUTH_REQUIRED"
-  );
-  assert.throws(
-    () => contract.authorizeHeaders({ "x-zotero-agent-token": "wrong" }, "secret"),
-    (error) => error.code === "AUTH_REQUIRED"
-  );
-});
-
 test("normalize command request requires a command string", () => {
   assert.throws(
     () => contract.normalizeCommandRequest({ args: {} }),
@@ -662,9 +723,9 @@ test("normalize command request requires a command string", () => {
 });
 
 test("success payload is stable JSON", () => {
-  const [status, headers, body] = contract.success("collections.list", { ok: true });
+  const [status, contentType, body] = contract.success("collections.list", { ok: true });
   assert.equal(status, 200);
-  assert.equal(headers["Content-Type"], "application/json");
+  assert.equal(contentType, "application/json");
   assert.deepEqual(JSON.parse(body), {
     ok: true,
     command: "collections.list",
@@ -673,9 +734,9 @@ test("success payload is stable JSON", () => {
 });
 
 test("success payload always includes data", () => {
-  const [status, headers, body] = contract.success("collections.list", undefined);
+  const [status, contentType, body] = contract.success("collections.list", undefined);
   assert.equal(status, 200);
-  assert.equal(headers["Content-Type"], "application/json");
+  assert.equal(contentType, "application/json");
   assert.deepEqual(JSON.parse(body), {
     ok: true,
     command: "collections.list",
@@ -684,17 +745,17 @@ test("success payload always includes data", () => {
 });
 
 test("failure payload serializes validation errors", () => {
-  const [status, headers, body] = contract.failure(
-    new contract.CommandValidationError(403, "DENIED", "Nope", { field: "token" })
+  const [status, contentType, body] = contract.failure(
+    new contract.CommandValidationError(403, "DENIED", "Nope", { field: "reason" })
   );
   assert.equal(status, 403);
-  assert.equal(headers["Content-Type"], "application/json");
+  assert.equal(contentType, "application/json");
   assert.deepEqual(JSON.parse(body), {
     ok: false,
     error: {
       code: "DENIED",
       message: "Nope",
-      details: { field: "token" }
+      details: { field: "reason" }
     }
   });
 });

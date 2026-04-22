@@ -1,6 +1,16 @@
 {
   "manifest_version": 2,
   "name": "Zotero Local Agent Management",
-  "version": "0.1.0",
-  "description": "Local agent-facing Zotero management bridge"
+  "version": "0.1.6",
+  "description": "Local agent-facing Zotero management bridge",
+  "author": "CliuHub",
+  "homepage_url": "https://github.com/cliuhub/zotero-claude-plugin",
+  "applications": {
+    "zotero": {
+      "id": "zotero-local-agent-management@cliuhub.github.io",
+      "update_url": "https://raw.githubusercontent.com/cliuhub/zotero-claude-plugin/main/updates.json",
+      "strict_min_version": "7.0",
+      "strict_max_version": "9.0.*"
+    }
+  }
 }

@@ -296,7 +296,7 @@ Experimental attachment mutation commands should follow a similar principle:
 
 ### Authentication
 
-The plugin write bridge should require a local shared token for all mutating operations and for unsafe commands.
+The plugin write bridge is local-only and accepts direct local requests for mutating operations and unsafe commands.
 
 The built-in read API remains governed by Zotero's own local API behavior.
 

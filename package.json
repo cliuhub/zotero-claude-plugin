@@ -2,9 +2,9 @@
   "name": "zotero-local-agent-management",
   "private": true,
   "scripts": {
-    "make-token": "node scripts/generate-token.mjs --write",
+    "install:source": "node scripts/install-source-plugin.mjs",
     "test": "node --test tests/*.test.cjs",
-    "check:syntax": "node --check plugin/bootstrap.js && node --check plugin/shared/contract.js && node --check scripts/build-plugin.mjs && node --check scripts/generate-token.mjs && python3 -m py_compile scripts/zotero_cli.py && sh -n bin/zotero",
+    "check:syntax": "node --check plugin/bootstrap.js && node --check plugin/shared/contract.js && node --check scripts/build-plugin.mjs && node --check scripts/install-source-plugin.mjs && python3 -m py_compile scripts/zotero_cli.py scripts/pdf_text_extract.py && swiftc -typecheck scripts/pdf_text_extract.swift && sh -n bin/zotero",
     "build:xpi": "node scripts/build-plugin.mjs"
   }
 }

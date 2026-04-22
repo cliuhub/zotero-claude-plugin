@@ -11,7 +11,6 @@ Use this skill when Zotero Desktop is running on the same machine and the local 
 
 - Zotero is running with local HTTP access enabled on `http://127.0.0.1:23119`
 - the local plugin build is installed in Zotero
-- `ZOTERO_AGENT_TOKEN` is set, or `--token` is passed to the CLI
 - the target library is the personal Zotero library
 
 ## Default workflow
@@ -20,20 +19,34 @@ Use this skill when Zotero Desktop is running on the same machine and the local 
 2. Read before mutating when the target is ambiguous.
 3. Prefer item keys and collection keys over numeric IDs.
 4. Treat trash operations as destructive but reversible.
-5. Use stable attachment retrieval commands for PDFs before reaching for experimental attachment mutation.
+5. For actual paper reading, prefer `zotero items paper --key ...`. That command resolves the best PDF, returns the local path, and parses the paper text in one response.
 6. Use `unsafe run-js` only as a last resort when the structured command surface cannot do the job.
+7. For PDFs, `zotero items paper` and `zotero attachments read-text` default to `--extractor auto`: local `pdfplumber` parsing first, then OCRmyPDF redo or local OCR if the first result is obviously bad. Use `--extractor pdf`, `ocr`, `ocrmypdf-redo`, `ocrmypdf-force`, or `zotero` only when you need a specific path.
 
 ## Read commands
 
 - `zotero collections list`
 - `zotero items list`
+- `zotero items list --collection-key COL123`
 - `zotero items get --key ITEM123`
+- `zotero items paper --key ITEM123`
 - `zotero items search --query "keyword"`
+- `zotero items lookup-doi --doi 10.1000/example`
 - `zotero attachments list --item-key ITEM123`
+- `zotero attachments best-pdf --item-key ITEM123`
 - `zotero attachments path --attachment-key PDF123`
 - `zotero attachments read-text --attachment-key PDF123`
 - `zotero attachments export --attachment-key PDF123 --to /tmp/paper.pdf`
 - `zotero attachments open --attachment-key PDF123`
+- `zotero notes list --item-key ITEM123`
+- `zotero notes get --key NOTE123`
+
+## PDF Reading Workflow
+
+1. Start with `zotero items paper --key ITEM123`.
+2. Trust the returned `attachment.path` and parsed `attachment.text` as the default reading surface.
+3. Use `zotero attachments best-pdf --item-key ITEM123` or `attachments path` only when you need lower-level attachment control.
+4. Use explicit `--extractor ...` modes only when you need to override the automatic parser choice.
 
 ## Write commands
 
@@ -41,12 +54,15 @@ Use this skill when Zotero Desktop is running on the same machine and the local 
 - `zotero collections rename --key COL123 --name "Reading Queue"`
 - `zotero collections trash --key COL123`
 - `zotero items create --item-type journalArticle --title "Example"`
+- `zotero items create --doi 10.3115/v1/D14-1179`
 - `zotero items update --key ITEM123 --patch '{"abstractNote":"Updated"}'`
 - `zotero items set-field --key ITEM123 --field DOI --value 10.1000/test`
 - `zotero items add-to-collection --key ITEM123 --collection-key COL123`
 - `zotero items remove-from-collection --key ITEM123 --collection-key COL123`
 - `zotero items move --key ITEM123 --collection-key COL456`
 - `zotero items trash --key ITEM123`
+- `zotero notes upsert --item-key ITEM123 --note "Key takeaway"`
+- `zotero notes trash --key NOTE123`
 - `zotero tags add --key ITEM123 --tag priority`
 - `zotero tags remove --key ITEM123 --tag priority`
 - `zotero bulk trash --keys ITEM123,ITEM456`

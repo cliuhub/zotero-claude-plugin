@@ -4,6 +4,68 @@ let addonRootURI = null;
 let cachedContract = null;
 let registeredPaths = [];
 
+function createInlineContract() {
+  class CommandValidationError extends Error {
+    constructor(status, code, message, details = {}) {
+      super(message);
+      this.name = "CommandValidationError";
+      this.status = status;
+      this.code = code;
+      this.details = details;
+    }
+  }
+
+  function ensureString(value, field) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new CommandValidationError(400, "INVALID_INPUT", `${field} must be a non-empty string`, { field });
+    }
+    return value.trim();
+  }
+
+  function normalizeCommandRequest(payload) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new CommandValidationError(400, "INVALID_INPUT", "payload must be an object", { field: "payload" });
+    }
+    return {
+      command: ensureString(payload.command, "command"),
+      args: payload.args && typeof payload.args === "object" && !Array.isArray(payload.args) ? payload.args : {}
+    };
+  }
+
+  function success(command, data) {
+    return [
+      200,
+      "application/json",
+      JSON.stringify({ ok: true, command, data: data === undefined ? {} : data })
+    ];
+  }
+
+  function failure(error) {
+    const normalized = error instanceof CommandValidationError
+      ? error
+      : new CommandValidationError(500, "INTERNAL_ERROR", error?.message || "Unknown error");
+    return [
+      normalized.status,
+      "application/json",
+      JSON.stringify({
+        ok: false,
+        error: {
+          code: normalized.code,
+          message: normalized.message,
+          details: normalized.details
+        }
+      })
+    ];
+  }
+
+  return {
+    CommandValidationError,
+    normalizeCommandRequest,
+    success,
+    failure
+  };
+}
+
 function getContract() {
   if (cachedContract) {
     return cachedContract;
@@ -14,13 +76,24 @@ function getContract() {
   }
   if (addonRootURI && typeof Services !== "undefined" && Services.scriptloader) {
     const scope = {};
-    Services.scriptloader.loadSubScript(addonRootURI + "shared/contract.js", scope);
-    if (scope.ZoteroAgentContract) {
-      cachedContract = scope.ZoteroAgentContract;
-      return cachedContract;
+    try {
+      Services.scriptloader.loadSubScript(addonRootURI + "shared/contract.js", scope);
+      const loadedContract = scope.ZoteroAgentContract
+        || scope.globalThis?.ZoteroAgentContract
+        || scope.window?.ZoteroAgentContract
+        || scope.self?.ZoteroAgentContract;
+      if (loadedContract) {
+        cachedContract = loadedContract;
+        return cachedContract;
+      }
+    } catch (error) {
+      if (typeof Zotero !== "undefined" && typeof Zotero.logError === "function") {
+        Zotero.logError(error);
+      }
     }
   }
-  throw new Error("Unable to load Zotero agent contract");
+  cachedContract = createInlineContract();
+  return cachedContract;
 }
 
 const contract = new Proxy({}, {
@@ -169,10 +242,144 @@ function serializeAttachment(attachment, extra = {}) {
     attachmentKey: attachment.key ?? null,
     itemID: attachment.id ?? null,
     parentItemID: attachment.parentItemID ?? null,
+    parentItemKey: attachment.parentKey ?? null,
     title,
+    filename: attachment.attachmentFilename ?? attachment.filename ?? null,
     contentType: attachment.attachmentContentType ?? null,
     linkMode: attachment.attachmentLinkMode ?? null,
+    deleted: !!attachment.deleted,
     ...extra
+  };
+}
+
+function ensureNoteItem(item, noteKey) {
+  if (!item) {
+    throw commandError(404, "NOT_FOUND", `Note not found: ${noteKey}`, { noteKey });
+  }
+  const isNote = typeof item.isNote === "function"
+    ? item.isNote()
+    : item.itemType === "note" || item.data?.itemType === "note";
+  if (!isNote) {
+    throw commandError(400, "INVALID_INPUT", `${noteKey} is not a note item`, {
+      noteKey
+    });
+  }
+  return item;
+}
+
+async function resolveNoteByKey(context, noteKey) {
+  const key = requireString(noteKey, "noteKey");
+  if (typeof context.resolveNoteByKey === "function") {
+    return ensureNoteItem(await context.resolveNoteByKey(key), key);
+  }
+  return ensureNoteItem(await resolveItemByKey(context, key), key);
+}
+
+function escapeHTML(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function noteHTMLToText(noteHTML) {
+  if (typeof noteHTML !== "string") {
+    return "";
+  }
+  return noteHTML
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p\s*>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replaceAll("&nbsp;", " ")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function notePreview(text, limit = 200) {
+  const collapsed = String(text || "").replace(/\s+/g, " ").trim();
+  if (collapsed.length <= limit) {
+    return collapsed;
+  }
+  return `${collapsed.slice(0, limit - 1).trim()}…`;
+}
+
+function noteTitle(text) {
+  return notePreview(text, 80) || "(empty note)";
+}
+
+function normalizeNoteHTML(note) {
+  const value = requireString(note, "note");
+  if (/^\s*</.test(value)) {
+    return value;
+  }
+  const paragraphs = value
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map((paragraph) => `<p>${escapeHTML(paragraph).replace(/\n/g, "<br/>")}</p>`);
+  if (paragraphs.length > 0) {
+    return paragraphs.join("");
+  }
+  return `<p>${escapeHTML(value)}</p>`;
+}
+
+function getNoteHTML(note) {
+  if (typeof note?.getNote === "function") {
+    return note.getNote() || "";
+  }
+  return note?.note ?? "";
+}
+
+function setNoteHTML(note, value) {
+  if (typeof note?.setNote === "function") {
+    note.setNote(value);
+    return;
+  }
+  note.note = value;
+}
+
+async function resolveParentItemKey(context, item) {
+  if (item?.parentKey) {
+    return item.parentKey;
+  }
+  const parentItemID = item?.parentItemID ?? item?.parentID ?? null;
+  if (!parentItemID) {
+    return null;
+  }
+  if (typeof context.resolveItemByID === "function") {
+    const resolved = await context.resolveItemByID(parentItemID);
+    return resolved?.key ?? null;
+  }
+  const items = context.items || context.Zotero?.Items;
+  if (items && typeof items.get === "function") {
+    const parentItem = items.get(parentItemID);
+    return parentItem?.key ?? null;
+  }
+  return null;
+}
+
+async function serializeNote(context, note, extra = {}) {
+  const noteHtml = getNoteHTML(note);
+  const noteText = noteHTMLToText(noteHtml);
+  return {
+    noteKey: note?.key ?? null,
+    noteID: note?.id ?? null,
+    parentItemKey: extra.parentItemKey ?? await resolveParentItemKey(context, note),
+    parentItemID: note?.parentItemID ?? note?.parentID ?? null,
+    title: noteTitle(noteText),
+    preview: notePreview(noteText),
+    noteHtml,
+    noteText,
+    deleted: !!note?.deleted,
+    dateAdded: note?.dateAdded ?? null,
+    dateModified: note?.dateModified ?? null
   };
 }
 
@@ -397,7 +604,20 @@ function updateItemFields(item, fields) {
   }
   for (const [field, value] of Object.entries(nextFields)) {
     if (field === "itemType") {
-      item.itemType = value;
+      if (typeof item.setType === "function") {
+        item.setType(value);
+        continue;
+      }
+      if (item.itemType === undefined || item.itemType === null) {
+        item.itemType = value;
+        continue;
+      }
+      if (item.itemType !== value) {
+        throw commandError(400, "INVALID_INPUT", "itemType cannot be changed for this item", {
+          field,
+          value
+        });
+      }
       continue;
     }
     if (typeof item.setField === "function") {
@@ -488,6 +708,13 @@ function removeTagsFromItem(item, tags) {
 async function trashItems(context, items) {
   if (typeof context.trashItems === "function") {
     await context.trashItems(items.map((item) => item.id));
+    for (const item of items) {
+      item.deleted = true;
+    }
+    return;
+  }
+  if (context.Zotero?.Items && typeof context.Zotero.Items.trashTx === "function") {
+    await context.Zotero.Items.trashTx(items.map((item) => item.id));
     for (const item of items) {
       item.deleted = true;
     }
@@ -606,7 +833,6 @@ function createItemCommands(context) {
       } else {
         throw commandError(500, "NOT_AVAILABLE", "Item creation is not available");
       }
-      item.itemType = itemType;
       updateItemFields(item, args.fields || {});
       await setItemCollections(context, item, args.collectionKeys || []);
       addTagsToItem(item, args.tags || []);
@@ -682,6 +908,45 @@ function createTagCommands(context) {
         itemKey: item.key ?? null,
         tags: getTagNames(item)
       };
+    }
+  };
+}
+
+function createNoteCommands(context) {
+  return {
+    "notes.upsert": async function (args = {}) {
+      const noteHTML = normalizeNoteHTML(args.note);
+      let note;
+      let parentItemKey = args.parentItemKey ? requireString(args.parentItemKey, "parentItemKey") : null;
+      if (args.noteKey) {
+        note = await resolveNoteByKey(context, args.noteKey);
+      } else if (typeof context.createItemObject === "function") {
+        note = context.createItemObject("note");
+      } else if (context.Zotero?.Item) {
+        note = new context.Zotero.Item("note");
+        note.libraryID = getUserLibraryID(context);
+      } else {
+        throw commandError(500, "NOT_AVAILABLE", "Note creation is not available");
+      }
+
+      if (parentItemKey) {
+        const parentItem = await resolveItemByKey(context, parentItemKey);
+        note.parentID = parentItem.id;
+        note.parentItemID = parentItem.id;
+        note.parentKey = parentItem.key ?? parentItemKey;
+      }
+
+      setNoteHTML(note, noteHTML);
+      await saveEntity(note);
+      return serializeNote(context, note, {
+        parentItemKey: parentItemKey ?? undefined
+      });
+    },
+    "notes.trash": async function (args = {}) {
+      const note = await resolveNoteByKey(context, args.noteKey);
+      const parentItemKey = await resolveParentItemKey(context, note);
+      await trashItems(context, [note]);
+      return serializeNote(context, note, { parentItemKey });
     }
   };
 }
@@ -829,6 +1094,7 @@ function createCommandRegistry(context = {}) {
     },
     ...createCollectionCommands(context),
     ...createItemCommands(context),
+    ...createNoteCommands(context),
     ...createTagCommands(context),
     ...createBulkCommands(context),
     ...createUnsafeCommands(context),
@@ -836,13 +1102,6 @@ function createCommandRegistry(context = {}) {
     ,
     ...createExperimentalAttachmentCommands(context)
   };
-}
-
-function resolveExpectedToken(options = {}) {
-  if (typeof options.tokenSource === "function") {
-    return options.tokenSource();
-  }
-  return options.expectedToken;
 }
 
 function createEndpoint(registry, options = {}) {
@@ -854,8 +1113,6 @@ function createEndpoint(registry, options = {}) {
     supportedDataTypes: ["application/json"],
     init: async function (request) {
       try {
-        const expectedToken = resolveExpectedToken(options);
-        contract.authorizeHeaders(request.headers, expectedToken);
         const normalized = contract.normalizeCommandRequest(request.data || {});
         const handler = hasOwn(registry, normalized.command) ? registry[normalized.command] : undefined;
         if (!handler) {
@@ -881,20 +1138,12 @@ function getRuntimeContext() {
   };
 }
 
-function getRuntimeToken() {
-  if (typeof Zotero === "undefined" || !Zotero.Prefs) {
-    return "";
-  }
-  const value = Zotero.Prefs.get("extensions.zotero.zoteroAgent.token");
-  return typeof value === "string" ? value.trim() : "";
-}
-
 function createHealthEndpoint(registry) {
   function Endpoint() {}
   Endpoint.prototype = {
     supportedMethods: ["GET"],
     supportedDataTypes: "*",
-    init: async function () {
+    init: async function (_request) {
       try {
         return contract.success("health.get", await registry["health.get"]());
       } catch (error) {
@@ -911,9 +1160,7 @@ function registerRuntimeEndpoints() {
   }
   const registry = createCommandRegistry(getRuntimeContext());
   Zotero.Server.init();
-  Zotero.Server.Endpoints["/agent/command"] = createEndpoint(registry, {
-    tokenSource: getRuntimeToken
-  });
+  Zotero.Server.Endpoints["/agent/command"] = createEndpoint(registry);
   Zotero.Server.Endpoints["/agent/health"] = createHealthEndpoint(registry);
   registeredPaths = ["/agent/command", "/agent/health"];
 }
@@ -946,6 +1193,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     createCommandRegistry,
     createEndpoint,
+    createHealthEndpoint,
     install,
     startup,
     shutdown,
