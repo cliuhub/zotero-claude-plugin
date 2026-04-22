@@ -7,7 +7,7 @@ Status: Approved for planning
 
 Build a local-first Zotero management system for one personal library. The system should let AI agents manage Zotero naturally through a `zotero` CLI and a dedicated skill, while reusing Zotero's built-in local read API where possible and adding a small plugin-based write bridge only where needed.
 
-The design intentionally excludes attachment management in version 1. The previous attachment path was fragile and should be deferred until the core management workflow is reliable.
+Version 1 includes stable attachment retrieval so an agent can find, open, read, export, or otherwise access a paper PDF when Zotero already has it. Attachment mutation remains an explicitly experimental path because previous tests showed it could be slow or fragile.
 
 ## Goals
 
@@ -17,15 +17,17 @@ The design intentionally excludes attachment management in version 1. The previo
 - Add a small authenticated plugin bridge for write operations not covered by the built-in local API.
 - Keep destructive behavior limited to Zotero Trash rather than permanent deletion.
 - Provide a dedicated skill that teaches agents how to use the CLI safely and effectively.
+- Let an agent retrieve a paper PDF from Zotero in whatever form it needs for reading or downstream processing.
 
 ## Non-Goals For Version 1
 
-- Attachment import, attachment movement, or attachment editing
 - Group library support
 - Permanent deletion
 - Direct SQLite access
 - Replacing Zotero's UI or library model
 - Exposing every Zotero capability as a first-class structured command on day one
+
+Attachment mutation is not a normal stable workflow in version 1. It may exist behind explicit experimental commands, but it is not part of the reliability promise.
 
 ## User And System Context
 
@@ -100,6 +102,10 @@ Examples:
 - `zotero items set-field --key ABC123 --field DOI --value 10.1000/test`
 - `zotero items trash --key ABC123`
 - `zotero bulk trash --keys ABC123,DEF456`
+- `zotero attachments best-pdf --item-key ABC123`
+- `zotero attachments path --attachment-key PDF123`
+- `zotero attachments read-text --attachment-key PDF123`
+- `zotero attachments export --attachment-key PDF123 --to /tmp/paper.pdf`
 
 The CLI chooses the correct backend automatically:
 
@@ -125,6 +131,10 @@ Provide a dedicated skill that instructs agents to:
 ### Write flow
 
 `agent -> skill guidance -> zotero CLI -> plugin /agent/command -> Zotero JavaScript API -> JSON result`
+
+### Attachment retrieval flow
+
+`agent -> skill guidance -> zotero attachments ... -> built-in read API or plugin helper -> attachment metadata/path/text -> JSON result`
 
 ### Advanced fallback flow
 
@@ -223,6 +233,27 @@ Recommended optional future flag:
 - remove tag
 - replace or patch tags through item update where appropriate
 
+### Stable Attachment Retrieval
+
+- list attachments for an item
+- identify the best PDF attachment for a parent item
+- get attachment metadata
+- get local file path for a stored attachment
+- open attachment
+- read extracted text when available
+- export or copy an attachment file to another path for downstream agent use
+
+These commands are part of the normal stable API because they support “agent can get the paper however it needs”.
+
+### Experimental Attachment Mutation
+
+- add attachment
+- rename attachment metadata
+- trash attachment
+- replace attachment
+
+These operations may be present in version 1 only as explicitly experimental commands because they were previously observed to be slow or fragile in practice.
+
 ### Bulk Operations
 
 Support bulk operations in version 1 for common agent workflows, including at minimum:
@@ -255,6 +286,12 @@ Rules:
 - should return structured success/error output
 - should not be the default path for normal operations
 
+Experimental attachment mutation commands should follow a similar principle:
+
+- clearly labeled experimental
+- allowed only through explicit commands
+- separated from the stable retrieval commands
+
 ## Authentication And Safety
 
 ### Authentication
@@ -270,6 +307,7 @@ The built-in read API remains governed by Zotero's own local API behavior.
 - permanent delete is not exposed
 - unsafe JS execution is disabled by default
 - bulk operations should report partial failures explicitly
+- stable attachment retrieval should remain usable even if experimental attachment mutation is disabled
 
 ### Ambiguity handling
 
@@ -287,6 +325,7 @@ The skill should instruct agents to confirm or restate the intended target when:
 - execute write operations through Zotero's JavaScript API
 - expose health/config information
 - gate unsafe mode behind an explicit preference
+- provide attachment helper operations needed for stable retrieval when the built-in read API is insufficient
 
 ## CLI Responsibilities
 
@@ -295,6 +334,7 @@ The skill should instruct agents to confirm or restate the intended target when:
 - normalize arguments and identifiers
 - emit JSON by default
 - expose a stable command hierarchy independent of Zotero internal implementation details
+- give attachment retrieval first-class commands separate from experimental attachment mutation
 
 ## Skill Responsibilities
 
@@ -304,6 +344,7 @@ The skill should instruct agents to confirm or restate the intended target when:
 - avoid unsafe mode unless needed
 - describe destructive behavior honestly
 - provide examples for common workflows
+- teach attachment retrieval as a normal workflow and attachment mutation as experimental
 
 ## Error Handling
 
@@ -344,6 +385,8 @@ The old bridge-specific naming should be simplified. The new skill name should b
 - plugin command dispatch tests
 - error-shape tests
 - bulk result-shape tests
+- attachment retrieval contract tests
+- attachment export/path/read-text tests where practical at the contract boundary
 
 ### Manual verification
 
@@ -354,10 +397,12 @@ Against a real local Zotero install:
 - collection create/rename/trash works
 - item create/update/set-field/trash works
 - move/add/remove collection membership works
-- tag operations works
+- tag operations work
+- attachment list/path/open/read or export works for a stored PDF
 - bulk operations work
 - unsafe mode is blocked when disabled
 - unsafe mode works only after explicit enablement
+- experimental attachment mutation, if enabled, is tested separately and not treated as a blocker for stable retrieval
 
 ## Rollout Strategy
 
@@ -365,10 +410,12 @@ Version 1 should land in this order:
 
 1. plugin health/config plus authenticated command endpoint
 2. CLI read wrappers over built-in Zotero local API
-3. CLI write wrappers for collections, items, and tags
-4. bulk operations
-5. `zotero-manage` skill
-6. guarded unsafe fallback
+3. stable attachment retrieval commands
+4. CLI write wrappers for collections, items, and tags
+5. bulk operations
+6. `zotero-manage` skill
+7. guarded unsafe fallback
+8. optional experimental attachment mutation commands
 
 This keeps the first working version useful early while still moving toward full management capability.
 
@@ -381,5 +428,6 @@ The design is successful when:
 3. writes use a small authenticated plugin bridge
 4. the normal agent path is a JSON-first `zotero` CLI
 5. delete means Trash, not permanent deletion
-6. version 1 deliberately excludes attachment management
-7. a guarded raw-JS fallback exists for advanced operations not yet wrapped
+6. version 1 includes stable attachment retrieval for PDFs already in Zotero
+7. attachment mutation is clearly separated as experimental or deferred
+8. a guarded raw-JS fallback exists for advanced operations not yet wrapped
