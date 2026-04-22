@@ -2,7 +2,7 @@
 
 const contract = require("./shared/contract.js");
 
-function createCommandRegistry(context) {
+function createCommandRegistry(context = {}) {
   return {
     "health.get": async function () {
       return {
@@ -18,14 +18,23 @@ function createCommandRegistry(context) {
   };
 }
 
-function createEndpoint(registry) {
+function resolveExpectedToken(options = {}) {
+  if (typeof options.tokenSource === "function") {
+    return options.tokenSource();
+  }
+  return options.expectedToken;
+}
+
+function createEndpoint(registry, options = {}) {
+  const expectedToken = resolveExpectedToken(options);
+
   function Endpoint() {}
   Endpoint.prototype = {
     supportedMethods: ["POST"],
     supportedDataTypes: ["application/json"],
     init: async function (request) {
       try {
-        contract.authorizeHeaders(request.headers, "__ZOTERO_AGENT_TOKEN__");
+        contract.authorizeHeaders(request.headers, expectedToken);
         const normalized = contract.normalizeCommandRequest(request.data || {});
         const handler = registry[normalized.command];
         if (!handler) {

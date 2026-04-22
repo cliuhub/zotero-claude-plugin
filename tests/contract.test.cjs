@@ -20,6 +20,54 @@ test("bootstrap exports a command registry with health and collections.list", as
   assert.equal(typeof registry["collections.list"], "function");
 });
 
+test("createEndpoint dispatches a known command when authorized", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = {
+    "collections.list": async (args) => ({ received: args })
+  };
+  const Endpoint = bootstrap.createEndpoint(registry, { expectedToken: "real-token" });
+  const endpoint = new Endpoint();
+
+  const response = await endpoint.init({
+    headers: { "x-zotero-agent-token": "real-token" },
+    data: { command: "collections.list", args: { limit: 5 } }
+  });
+
+  assert.deepEqual(response, [
+    200,
+    { "Content-Type": "application/json" },
+    JSON.stringify({
+      ok: true,
+      command: "collections.list",
+      data: { received: { limit: 5 } }
+    })
+  ]);
+});
+
+test("createEndpoint returns a not-found failure for unknown commands", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const Endpoint = bootstrap.createEndpoint({}, { expectedToken: "real-token" });
+  const endpoint = new Endpoint();
+
+  const response = await endpoint.init({
+    headers: { "x-zotero-agent-token": "real-token" },
+    data: { command: "missing.command" }
+  });
+
+  assert.deepEqual(response, [
+    404,
+    { "Content-Type": "application/json" },
+    JSON.stringify({
+      ok: false,
+      error: {
+        code: "NOT_FOUND",
+        message: "Unknown command: missing.command",
+        details: {}
+      }
+    })
+  ]);
+});
+
 test("authorize accepts the configured token", () => {
   assert.doesNotThrow(() => {
     contract.authorizeHeaders({ "x-zotero-agent-token": "secret" }, "secret");
