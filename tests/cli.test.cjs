@@ -367,3 +367,8 @@ test("attachments experimental add posts the file payload to the plugin command 
     });
   }
 });
+
+test("zotero-manage skill file exists", async () => {
+  const fs = require("node:fs");
+  assert.equal(fs.existsSync("skills/zotero-manage/SKILL.md"), true);
+});

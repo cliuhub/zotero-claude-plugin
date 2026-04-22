@@ -1,5 +1,19 @@
 # Zotero Local Agent Management
 
+## Quick start
+
+1. Build the plugin XPI with `npm run build:xpi`.
+2. Install the generated XPI in Zotero from `Tools -> Plugins -> gear -> Install Add-on From File...`.
+3. Set the local token in Zotero using `plugin/prefs.js.template` as the source of truth.
+4. Export the same token in your shell as `ZOTERO_AGENT_TOKEN`.
+5. Use `python3 scripts/zotero_cli.py --help` or `sh bin/zotero --help` to drive the local API.
+
+## Skill
+
+The agent skill lives at `skills/zotero-manage/SKILL.md`.
+
+To make it available to Codex locally, link or copy `skills/zotero-manage/` into `~/.codex/skills/`.
+
 ## CLI scaffold
 
 This project includes a JSON-first `zotero` CLI scaffold implemented in `scripts/zotero_cli.py`.
@@ -56,3 +70,15 @@ Safety defaults:
 
 - `unsafe.runJS` is disabled unless `extensions.zotero.zoteroAgent.unsafeEnabled` is set to `true`
 - experimental attachment mutation is disabled unless `extensions.zotero.zoteroAgent.experimentalAttachmentsEnabled` is set to `true`
+
+Stable support:
+
+- read commands
+- structured collection, item, tag, and bulk management
+- attachment path, open, read-text, and export
+
+Experimental support:
+
+- attachment add
+- attachment trash
+- raw unsafe JavaScript execution
