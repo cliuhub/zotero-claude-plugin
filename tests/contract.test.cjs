@@ -9,6 +9,17 @@ test("package scripts include build and test commands", async () => {
   assert.equal(typeof pkg.scripts["make-token"], "string");
 });
 
+test("bootstrap exports a command registry with health and collections.list", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  assert.equal(typeof bootstrap.createCommandRegistry, "function");
+  const registry = bootstrap.createCommandRegistry({
+    Zotero: {},
+    contract: { CommandValidationError: Error }
+  });
+  assert.equal(typeof registry["health.get"], "function");
+  assert.equal(typeof registry["collections.list"], "function");
+});
+
 test("authorize accepts the configured token", () => {
   assert.doesNotThrow(() => {
     contract.authorizeHeaders({ "x-zotero-agent-token": "secret" }, "secret");
