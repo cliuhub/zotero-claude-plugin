@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
@@ -10,6 +11,8 @@ import urllib.request
 
 DEFAULT_BASE_URL = "http://127.0.0.1:23119"
 DEFAULT_READ_API_ROOT = f"{DEFAULT_BASE_URL}/api/users/0"
+DEFAULT_COMMAND_URL = f"{DEFAULT_BASE_URL}/agent/command"
+TOKEN_ENV_NAMES = ("ZOTERO_AGENT_TOKEN", "ZOTERO_AGENT_BRIDGE_TOKEN")
 
 
 def print_json(value):
@@ -42,6 +45,22 @@ def normalize_api_root(args):
     return f"{args.base_url.rstrip('/')}/api/users/0"
 
 
+def normalize_command_url(args):
+    if args.command_url:
+        return args.command_url.rstrip("/")
+    return f"{args.base_url.rstrip('/')}/agent/command"
+
+
+def resolve_token(args):
+    if args.token:
+        return args.token
+    for env_name in TOKEN_ENV_NAMES:
+        value = os.environ.get(env_name)
+        if value:
+            return value
+    return None
+
+
 def build_url(api_root, path, params=None):
     url = f"{api_root.rstrip('/')}/{path.lstrip('/')}"
     query = {}
@@ -54,20 +73,79 @@ def build_url(api_root, path, params=None):
     return url
 
 
-def http_get_json(url):
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request) as response:
-        charset = response.headers.get_content_charset("utf-8")
-        body = response.read().decode(charset)
+def decode_json_response(response):
+    charset = response.headers.get_content_charset("utf-8")
+    body = response.read().decode(charset)
     if not body:
         return {}
     return json.loads(body)
 
 
+def request_json(url, method="GET", payload=None, headers=None):
+    request_headers = {
+        "Accept": "application/json",
+    }
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
+    with urllib.request.urlopen(request) as response:
+        return decode_json_response(response)
+
+
 def fetch_read_json(args, command, path, params=None):
     url = build_url(normalize_api_root(args), path, params)
-    data = http_get_json(url)
+    data = request_json(url)
     return success_payload(command, data)
+
+
+def plugin_command(args, command, command_args):
+    token = resolve_token(args)
+    if not token:
+        return error_payload(
+            command,
+            "TOKEN_REQUIRED",
+            "ZOTERO_AGENT_TOKEN is required for plugin-backed commands",
+            {"acceptedEnvVars": list(TOKEN_ENV_NAMES)},
+        )
+
+    try:
+        return request_json(
+            normalize_command_url(args),
+            method="POST",
+            payload={
+                "command": command,
+                "args": command_args,
+            },
+            headers={"x-zotero-agent-token": token},
+        )
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        if body:
+            try:
+                return json.loads(body)
+            except json.JSONDecodeError:
+                pass
+        return error_payload(
+            command,
+            "HTTP_ERROR",
+            "Request to plugin command endpoint failed",
+            {
+                "status": error.code,
+                "reason": error.reason,
+                "url": getattr(error, "url", None),
+            },
+        )
+    except urllib.error.URLError as error:
+        return error_payload(
+            command,
+            "CONNECTION_ERROR",
+            "Could not connect to the Zotero plugin command endpoint",
+            {"reason": str(error.reason)},
+        )
 
 
 def not_implemented_payload(command, details=None):
@@ -167,26 +245,37 @@ def handle_attachments_best_pdf(args):
 
 
 def handle_attachments_path(args):
-    return not_implemented_payload(
+    return plugin_command(
+        args,
         "attachments.path",
         {"attachmentKey": args.attachment_key},
     )
 
 
 def handle_attachments_read_text(args):
-    return not_implemented_payload(
-        "attachments.read-text",
+    return plugin_command(
+        args,
+        "attachments.readText",
         {"attachmentKey": args.attachment_key},
     )
 
 
 def handle_attachments_export(args):
-    return not_implemented_payload(
+    return plugin_command(
+        args,
         "attachments.export",
         {
             "attachmentKey": args.attachment_key,
             "to": args.to,
         },
+    )
+
+
+def handle_attachments_open(args):
+    return plugin_command(
+        args,
+        "attachments.open",
+        {"attachmentKey": args.attachment_key},
     )
 
 
@@ -204,6 +293,16 @@ def create_parser():
         "--api-root",
         default=None,
         help=f"Built-in Zotero local read API root. Default: {DEFAULT_READ_API_ROOT}",
+    )
+    parser.add_argument(
+        "--command-url",
+        default=None,
+        help=f"Plugin command endpoint. Default: {DEFAULT_COMMAND_URL}",
+    )
+    parser.add_argument(
+        "--token",
+        default=None,
+        help="Shared token for plugin-backed commands. Falls back to ZOTERO_AGENT_TOKEN.",
     )
 
     command_parsers = parser.add_subparsers(dest="resource", required=True)
@@ -258,6 +357,10 @@ def create_parser():
     attachments_export_parser.add_argument("--attachment-key", required=True)
     attachments_export_parser.add_argument("--to", required=True)
     attachments_export_parser.set_defaults(handler=handle_attachments_export)
+
+    attachments_open_parser = attachments_commands.add_parser("open")
+    attachments_open_parser.add_argument("--attachment-key", required=True)
+    attachments_open_parser.set_defaults(handler=handle_attachments_open)
 
     return parser
 

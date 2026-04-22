@@ -2,6 +2,22 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const contract = require("../plugin/shared/contract.js");
 
+function createAttachment(overrides = {}) {
+  const fields = { title: "Stored PDF", ...(overrides.fields || {}) };
+  return {
+    key: "PDF123",
+    id: 42,
+    parentItemID: 7,
+    attachmentContentType: "application/pdf",
+    attachmentLinkMode: 1,
+    isAttachment: () => true,
+    getField: (field) => fields[field] || null,
+    getFilePathAsync: async () => "/tmp/stored-paper.pdf",
+    attachmentText: Promise.resolve("Extracted attachment text"),
+    ...overrides,
+  };
+}
+
 test("package scripts include build and test commands", async () => {
   const pkg = require("../package.json");
   assert.equal(typeof pkg.scripts["build:xpi"], "string");
@@ -18,6 +34,96 @@ test("bootstrap exports a command registry with health and collections.list", as
   });
   assert.equal(typeof registry["health.get"], "function");
   assert.equal(typeof registry["collections.list"], "function");
+});
+
+test("bootstrap registry includes stable attachment retrieval commands", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = bootstrap.createCommandRegistry({
+    Zotero: {},
+    contract: { CommandValidationError: Error }
+  });
+  assert.equal(typeof registry["attachments.path"], "function");
+  assert.equal(typeof registry["attachments.readText"], "function");
+  assert.equal(typeof registry["attachments.export"], "function");
+  assert.equal(typeof registry["attachments.open"], "function");
+});
+
+test("attachments.path resolves attachment metadata and file path", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = bootstrap.createCommandRegistry({
+    resolveAttachmentByKey: async () => createAttachment()
+  });
+
+  const result = await registry["attachments.path"]({ attachmentKey: "PDF123" });
+
+  assert.deepEqual(result, {
+    attachmentKey: "PDF123",
+    itemID: 42,
+    parentItemID: 7,
+    title: "Stored PDF",
+    contentType: "application/pdf",
+    linkMode: 1,
+    path: "/tmp/stored-paper.pdf"
+  });
+});
+
+test("attachments.readText returns extracted text for a stored attachment", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = bootstrap.createCommandRegistry({
+    resolveAttachmentByKey: async () => createAttachment()
+  });
+
+  const result = await registry["attachments.readText"]({ attachmentKey: "PDF123" });
+
+  assert.equal(result.attachmentKey, "PDF123");
+  assert.equal(result.path, "/tmp/stored-paper.pdf");
+  assert.equal(result.text, "Extracted attachment text");
+});
+
+test("attachments.export copies the attachment to the requested path", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const writes = [];
+  const registry = bootstrap.createCommandRegistry({
+    resolveAttachmentByKey: async () => createAttachment(),
+    files: {
+      getBinaryContentsAsync: async (path) => `binary:${path}`,
+      putContentsAsync: async (path, data) => {
+        writes.push({ path, data });
+      }
+    }
+  });
+
+  const result = await registry["attachments.export"]({
+    attachmentKey: "PDF123",
+    to: "/tmp/exported-paper.pdf"
+  });
+
+  assert.deepEqual(writes, [{
+    path: "/tmp/exported-paper.pdf",
+    data: "binary:/tmp/stored-paper.pdf"
+  }]);
+  assert.equal(result.path, "/tmp/stored-paper.pdf");
+  assert.equal(result.exportedTo, "/tmp/exported-paper.pdf");
+});
+
+test("attachments.open delegates to the configured open helper", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const calls = [];
+  const registry = bootstrap.createCommandRegistry({
+    resolveAttachmentByKey: async () => createAttachment(),
+    openAttachment: async (attachment, path) => {
+      calls.push({ key: attachment.key, path });
+    }
+  });
+
+  const result = await registry["attachments.open"]({ attachmentKey: "PDF123" });
+
+  assert.deepEqual(calls, [{
+    key: "PDF123",
+    path: "/tmp/stored-paper.pdf"
+  }]);
+  assert.equal(result.opened, true);
+  assert.equal(result.path, "/tmp/stored-paper.pdf");
 });
 
 test("createEndpoint dispatches a known command when authorized", async () => {
