@@ -1,1 +1,4 @@
 .worktrees/
+.build/
+.local/
+builds/

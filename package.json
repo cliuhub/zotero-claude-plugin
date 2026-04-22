@@ -1,0 +1,10 @@
+{
+  "name": "zotero-local-agent-management",
+  "private": true,
+  "scripts": {
+    "make-token": "node scripts/generate-token.mjs --write",
+    "test": "node --test tests/*.test.cjs",
+    "check:syntax": "node --check plugin/bootstrap.js && node --check plugin/shared/contract.js && node --check scripts/build-plugin.mjs && node --check scripts/generate-token.mjs && python3 -m py_compile scripts/zotero_cli.py && sh -n bin/zotero",
+    "build:xpi": "node scripts/build-plugin.mjs"
+  }
+}
