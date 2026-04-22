@@ -245,3 +245,125 @@ test("bulk trash parses comma-separated keys into an array", async () => {
     });
   }
 });
+
+test("unsafe run-js posts the raw code payload to the plugin command bus", async () => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      requests.push(JSON.parse(body));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        command: "unsafe.runJS",
+        data: {
+          result: {
+            echoed: "return 1;"
+          }
+        }
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const result = await spawnResult(
+      "python3",
+      [
+        "scripts/zotero_cli.py",
+        "--base-url",
+        baseUrl,
+        "--token",
+        "real-token",
+        "unsafe",
+        "run-js",
+        "--code",
+        "return 1;"
+      ],
+      { cwd: process.cwd(), encoding: "utf8" }
+    );
+
+    assert.equal(result.code, 0);
+    assert.deepEqual(requests, [{
+      command: "unsafe.runJS",
+      args: {
+        code: "return 1;"
+      }
+    }]);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
+test("attachments experimental add posts the file payload to the plugin command bus", async () => {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      requests.push(JSON.parse(body));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        command: "attachments.experimental.add",
+        data: {
+          attachmentKey: "EXP123",
+          path: "/tmp/paper.pdf"
+        }
+      }));
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const result = await spawnResult(
+      "python3",
+      [
+        "scripts/zotero_cli.py",
+        "--base-url",
+        baseUrl,
+        "--token",
+        "real-token",
+        "attachments",
+        "experimental",
+        "add",
+        "--item-key",
+        "ITEM123",
+        "--file",
+        "/tmp/paper.pdf",
+        "--title",
+        "Main PDF"
+      ],
+      { cwd: process.cwd(), encoding: "utf8" }
+    );
+
+    assert.equal(result.code, 0);
+    assert.deepEqual(requests, [{
+      command: "attachments.experimental.add",
+      args: {
+        itemKey: "ITEM123",
+        file: "/tmp/paper.pdf",
+        title: "Main PDF"
+      }
+    }]);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});

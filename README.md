@@ -36,6 +36,12 @@ Structured write commands also use the plugin command endpoint:
 - `zotero bulk trash --keys ITEM123,ITEM456`
 - `zotero bulk add-tag --keys ITEM123,ITEM456 --tag queued`
 
+Guarded advanced commands:
+
+- `zotero unsafe run-js --code 'return 1;'`
+- `zotero attachments experimental add --item-key ITEM123 --file /tmp/paper.pdf --title "Main PDF"`
+- `zotero attachments experimental trash --attachment-key PDF123`
+
 The `zotero attachments best-pdf` command is still a placeholder and returns structured `NOT_IMPLEMENTED` JSON until a later task lands it.
 
 Defaults:
@@ -45,3 +51,8 @@ Defaults:
 - plugin command endpoint: `http://127.0.0.1:23119/agent/command`
 
 Plugin-backed attachment and write commands require a token. The CLI accepts `--token ...` or falls back to the `ZOTERO_AGENT_TOKEN` environment variable.
+
+Safety defaults:
+
+- `unsafe.runJS` is disabled unless `extensions.zotero.zoteroAgent.unsafeEnabled` is set to `true`
+- experimental attachment mutation is disabled unless `extensions.zotero.zoteroAgent.experimentalAttachmentsEnabled` is set to `true`

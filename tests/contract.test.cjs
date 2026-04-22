@@ -140,6 +140,81 @@ test("bootstrap registry includes core write and bulk commands", async () => {
   assert.equal(typeof registry["bulk.removeTag"], "function");
 });
 
+test("bootstrap registry includes unsafe and experimental attachment commands", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = bootstrap.createCommandRegistry({
+    Zotero: {},
+    contract: { CommandValidationError: Error }
+  });
+  assert.equal(typeof registry["unsafe.runJS"], "function");
+  assert.equal(typeof registry["attachments.experimental.add"], "function");
+  assert.equal(typeof registry["attachments.experimental.trash"], "function");
+});
+
+test("unsafe and experimental commands are disabled by default", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = bootstrap.createCommandRegistry({
+    getPref: () => false,
+    resolveItemByKey: async () => createItem(),
+    resolveAttachmentByKey: async () => createAttachment()
+  });
+
+  await assert.rejects(
+    () => registry["unsafe.runJS"]({ code: "return 1;" }),
+    (error) => error.code === "UNSAFE_DISABLED"
+  );
+  await assert.rejects(
+    () => registry["attachments.experimental.add"]({
+      itemKey: "ITEM123",
+      file: "/tmp/paper.pdf"
+    }),
+    (error) => error.code === "EXPERIMENTAL_DISABLED"
+  );
+  await assert.rejects(
+    () => registry["attachments.experimental.trash"]({
+      attachmentKey: "PDF123"
+    }),
+    (error) => error.code === "EXPERIMENTAL_DISABLED"
+  );
+});
+
+test("unsafe and experimental commands run when the corresponding prefs are enabled", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const createdAttachment = createAttachment({
+    key: "EXP123",
+    id: 77,
+    parentItemID: 88,
+    getField: (field) => field === "title" ? "Main PDF" : null,
+    getFilePathAsync: async () => "/tmp/uploaded-paper.pdf"
+  });
+  const trashedAttachment = createAttachment();
+  const registry = bootstrap.createCommandRegistry({
+    getPref: () => true,
+    runUnsafeJS: async (code) => ({ echoed: code }),
+    addAttachmentToItem: async () => createdAttachment,
+    resolveItemByKey: async () => createItem({ key: "ITEM123", id: 88 }),
+    resolveAttachmentByKey: async () => trashedAttachment
+  });
+
+  const unsafeResult = await registry["unsafe.runJS"]({ code: "return 1;" });
+  const addResult = await registry["attachments.experimental.add"]({
+    itemKey: "ITEM123",
+    file: "/tmp/uploaded-paper.pdf",
+    title: "Main PDF"
+  });
+  const trashResult = await registry["attachments.experimental.trash"]({
+    attachmentKey: "PDF123"
+  });
+
+  assert.deepEqual(unsafeResult, {
+    result: { echoed: "return 1;" }
+  });
+  assert.equal(addResult.attachmentKey, "EXP123");
+  assert.equal(addResult.path, "/tmp/uploaded-paper.pdf");
+  assert.equal(trashResult.deleted, true);
+  assert.equal(trashedAttachment.deleted, true);
+});
+
 test("collection write commands create rename and trash collections", async () => {
   const bootstrap = require("../plugin/bootstrap.js");
   const parent = createCollection({ key: "PARENT1", id: 8, name: "Parent" });

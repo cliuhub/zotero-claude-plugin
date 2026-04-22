@@ -421,6 +421,14 @@ def handle_bulk_remove_tag(args):
     )
 
 
+def handle_unsafe_run_js(args):
+    return plugin_command(
+        args,
+        "unsafe.runJS",
+        {"code": args.code},
+    )
+
+
 def handle_attachments_list(args):
     if args.item_key:
         key = urllib.parse.quote(args.item_key, safe="")
@@ -486,6 +494,26 @@ def handle_attachments_open(args):
     return plugin_command(
         args,
         "attachments.open",
+        {"attachmentKey": args.attachment_key},
+    )
+
+
+def handle_attachments_experimental_add(args):
+    return plugin_command(
+        args,
+        "attachments.experimental.add",
+        {
+            "itemKey": args.item_key,
+            "file": args.file,
+            "title": args.title,
+        },
+    )
+
+
+def handle_attachments_experimental_trash(args):
+    return plugin_command(
+        args,
+        "attachments.experimental.trash",
         {"attachmentKey": args.attachment_key},
     )
 
@@ -640,6 +668,13 @@ def create_parser():
     bulk_remove_tag_parser.add_argument("--tag", required=True)
     bulk_remove_tag_parser.set_defaults(handler=handle_bulk_remove_tag)
 
+    unsafe_parser = command_parsers.add_parser("unsafe")
+    unsafe_commands = unsafe_parser.add_subparsers(dest="action", required=True)
+
+    unsafe_run_js_parser = unsafe_commands.add_parser("run-js")
+    unsafe_run_js_parser.add_argument("--code", required=True)
+    unsafe_run_js_parser.set_defaults(handler=handle_unsafe_run_js)
+
     attachments_parser = command_parsers.add_parser("attachments")
     attachments_commands = attachments_parser.add_subparsers(dest="action", required=True)
 
@@ -669,6 +704,19 @@ def create_parser():
     attachments_open_parser = attachments_commands.add_parser("open")
     attachments_open_parser.add_argument("--attachment-key", required=True)
     attachments_open_parser.set_defaults(handler=handle_attachments_open)
+
+    attachments_experimental_parser = attachments_commands.add_parser("experimental")
+    attachments_experimental_commands = attachments_experimental_parser.add_subparsers(dest="experimental_action", required=True)
+
+    attachments_experimental_add_parser = attachments_experimental_commands.add_parser("add")
+    attachments_experimental_add_parser.add_argument("--item-key", required=True)
+    attachments_experimental_add_parser.add_argument("--file", required=True)
+    attachments_experimental_add_parser.add_argument("--title")
+    attachments_experimental_add_parser.set_defaults(handler=handle_attachments_experimental_add)
+
+    attachments_experimental_trash_parser = attachments_experimental_commands.add_parser("trash")
+    attachments_experimental_trash_parser.add_argument("--attachment-key", required=True)
+    attachments_experimental_trash_parser.set_defaults(handler=handle_attachments_experimental_trash)
 
     return parser
 

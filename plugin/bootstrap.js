@@ -1,6 +1,8 @@
 "use strict";
 
 const contract = require("./shared/contract.js");
+const UNSAFE_PREF = "extensions.zotero.zoteroAgent.unsafeEnabled";
+const EXPERIMENTAL_ATTACHMENTS_PREF = "extensions.zotero.zoteroAgent.experimentalAttachmentsEnabled";
 
 function commandError(status, code, message, details = {}) {
   return new contract.CommandValidationError(status, code, message, details);
@@ -258,6 +260,24 @@ function normalizeError(error) {
     message: error?.message || "Unknown error",
     details: {}
   };
+}
+
+function readBooleanPref(context, prefName, fallback = false) {
+  if (typeof context.getPref === "function") {
+    const value = context.getPref(prefName);
+    return value === undefined ? fallback : !!value;
+  }
+  if (context.Zotero?.Prefs && typeof context.Zotero.Prefs.get === "function") {
+    const value = context.Zotero.Prefs.get(prefName);
+    return value === undefined ? fallback : !!value;
+  }
+  return fallback;
+}
+
+function requirePrefEnabled(context, prefName, code, message) {
+  if (!readBooleanPref(context, prefName, false)) {
+    throw commandError(403, code, message, { pref: prefName });
+  }
 }
 
 async function resolveCollectionByKey(context, collectionKey) {
@@ -648,21 +668,103 @@ function createBulkCommands(context) {
   };
 }
 
+async function runUnsafeJS(context, code) {
+  if (typeof context.runUnsafeJS === "function") {
+    return context.runUnsafeJS(code);
+  }
+  if (!context.Zotero) {
+    throw commandError(500, "NOT_AVAILABLE", "Unsafe JavaScript execution is not available");
+  }
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const executor = new AsyncFunction("Zotero", code);
+  return executor(context.Zotero);
+}
+
+async function addExperimentalAttachment(context, args = {}) {
+  const item = await resolveItemByKey(context, args.itemKey);
+  const file = requireString(args.file, "file");
+  const title = args.title ? requireString(args.title, "title") : null;
+  if (typeof context.addAttachmentToItem === "function") {
+    return context.addAttachmentToItem({
+      itemKey: item.key ?? args.itemKey,
+      file,
+      title
+    });
+  }
+  if (context.Zotero?.Attachments && typeof context.Zotero.Attachments.importFromFile === "function") {
+    return context.Zotero.Attachments.importFromFile({
+      file,
+      parentItemID: item.id,
+      title: title || undefined,
+      contentType: "application/pdf"
+    });
+  }
+  throw commandError(500, "NOT_AVAILABLE", "Experimental attachment add is not available");
+}
+
+function createUnsafeCommands(context) {
+  return {
+    "unsafe.runJS": async function (args = {}) {
+      requirePrefEnabled(context, UNSAFE_PREF, "UNSAFE_DISABLED", "Unsafe JavaScript execution is disabled");
+      const code = requireString(args.code, "code");
+      return {
+        result: await runUnsafeJS(context, code)
+      };
+    }
+  };
+}
+
+function createExperimentalAttachmentCommands(context) {
+  return {
+    "attachments.experimental.add": async function (args = {}) {
+      requirePrefEnabled(
+        context,
+        EXPERIMENTAL_ATTACHMENTS_PREF,
+        "EXPERIMENTAL_DISABLED",
+        "Experimental attachment mutation is disabled"
+      );
+      const attachment = await addExperimentalAttachment(context, args);
+      const path = await resolveAttachmentPath(context, attachment);
+      return serializeAttachment(attachment, {
+        path,
+        experimental: true
+      });
+    },
+    "attachments.experimental.trash": async function (args = {}) {
+      requirePrefEnabled(
+        context,
+        EXPERIMENTAL_ATTACHMENTS_PREF,
+        "EXPERIMENTAL_DISABLED",
+        "Experimental attachment mutation is disabled"
+      );
+      const attachment = await resolveAttachmentByKey(context, args.attachmentKey);
+      await trashItems(context, [attachment]);
+      return serializeAttachment(attachment, {
+        deleted: !!attachment.deleted,
+        experimental: true
+      });
+    }
+  };
+}
+
 function createCommandRegistry(context = {}) {
   return {
     "health.get": async function () {
       return {
         ok: true,
         zoteroVersion: context.Zotero?.version || null,
-        unsafeEnabled: false,
-        experimentalAttachmentsEnabled: false
+        unsafeEnabled: readBooleanPref(context, UNSAFE_PREF, false),
+        experimentalAttachmentsEnabled: readBooleanPref(context, EXPERIMENTAL_ATTACHMENTS_PREF, false)
       };
     },
     ...createCollectionCommands(context),
     ...createItemCommands(context),
     ...createTagCommands(context),
     ...createBulkCommands(context),
+    ...createUnsafeCommands(context),
     ...createAttachmentCommands(context)
+    ,
+    ...createExperimentalAttachmentCommands(context)
   };
 }
 
