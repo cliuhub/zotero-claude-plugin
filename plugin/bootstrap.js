@@ -316,6 +316,38 @@ async function resolveItemByKey(context, itemKey) {
   throw commandError(404, "NOT_FOUND", `Item not found: ${key}`, { itemKey: key });
 }
 
+async function resolveCollectionKeysForItem(context, item) {
+  if (Array.isArray(item?.collectionKeys) && item.collectionKeys.length > 0) {
+    return [...item.collectionKeys];
+  }
+  if (typeof context.collectionKeysForItem === "function") {
+    const keys = await context.collectionKeysForItem(item);
+    return Array.isArray(keys) ? [...keys] : [];
+  }
+  if (typeof item?.getCollections !== "function") {
+    return [];
+  }
+  const collectionIDs = item.getCollections();
+  if (!Array.isArray(collectionIDs) || collectionIDs.length === 0) {
+    return [];
+  }
+  const collections = context.collections || context.Zotero?.Collections;
+  if (collections) {
+    if (typeof collections.get === "function") {
+      return collectionIDs
+        .map((collectionID) => collections.get(collectionID))
+        .map((collection) => collection?.key ?? null)
+        .filter(Boolean);
+    }
+    if (typeof collections.getByLibrary === "function") {
+      const knownCollections = collections.getByLibrary(getUserLibraryID(context), true, true);
+      const lookup = new Map(knownCollections.map((collection) => [collection.id, collection.key]));
+      return collectionIDs.map((collectionID) => lookup.get(collectionID) ?? String(collectionID));
+    }
+  }
+  return collectionIDs.map((collectionID) => String(collectionID));
+}
+
 async function listCollections(context) {
   if (typeof context.listCollections === "function") {
     return context.listCollections();
@@ -436,6 +468,9 @@ async function trashItems(context, items) {
   }
   if (context.Zotero?.Items && typeof context.Zotero.Items.trash === "function") {
     await context.Zotero.Items.trash(items.map((item) => item.id));
+    for (const item of items) {
+      item.deleted = true;
+    }
     return;
   }
   for (const item of items) {
@@ -551,13 +586,17 @@ function createItemCommands(context) {
       if (typeof context.createItem !== "function") {
         await saveEntity(item);
       }
-      return serializeItem(item);
+      return serializeItem(item, {
+        collectionKeys: await resolveCollectionKeysForItem(context, item)
+      });
     },
     "items.update": async function (args = {}) {
       const item = await resolveItemByKey(context, args.itemKey);
       updateItemFields(item, args.fields || args.patch || {});
       await saveEntity(item);
-      return serializeItem(item);
+      return serializeItem(item, {
+        collectionKeys: await resolveCollectionKeysForItem(context, item)
+      });
     },
     "items.setField": async function (args = {}) {
       const item = await resolveItemByKey(context, args.itemKey);
@@ -569,14 +608,18 @@ function createItemCommands(context) {
       }
       await saveEntity(item);
       return {
-        ...serializeItem(item),
+        ...serializeItem(item, {
+          collectionKeys: await resolveCollectionKeysForItem(context, item)
+        }),
         field
       };
     },
     "items.trash": async function (args = {}) {
       const item = await resolveItemByKey(context, args.itemKey);
       await trashItems(context, [item]);
-      return serializeItem(item);
+      return serializeItem(item, {
+        collectionKeys: await resolveCollectionKeysForItem(context, item)
+      });
     },
     "items.addToCollection": async function (args = {}) {
       const item = await resolveItemByKey(context, args.itemKey);
