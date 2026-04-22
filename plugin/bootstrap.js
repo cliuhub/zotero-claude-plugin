@@ -1,6 +1,33 @@
 "use strict";
 
-const contract = require("./shared/contract.js");
+let addonRootURI = null;
+let cachedContract = null;
+let registeredPaths = [];
+
+function getContract() {
+  if (cachedContract) {
+    return cachedContract;
+  }
+  if (typeof module !== "undefined" && module.exports && typeof require === "function") {
+    cachedContract = require("./shared/contract.js");
+    return cachedContract;
+  }
+  if (addonRootURI && typeof Services !== "undefined" && Services.scriptloader) {
+    const scope = {};
+    Services.scriptloader.loadSubScript(addonRootURI + "shared/contract.js", scope);
+    if (scope.ZoteroAgentContract) {
+      cachedContract = scope.ZoteroAgentContract;
+      return cachedContract;
+    }
+  }
+  throw new Error("Unable to load Zotero agent contract");
+}
+
+const contract = new Proxy({}, {
+  get(_target, property) {
+    return getContract()[property];
+  }
+});
 const UNSAFE_PREF = "extensions.zotero.zoteroAgent.unsafeEnabled";
 const EXPERIMENTAL_ATTACHMENTS_PREF = "extensions.zotero.zoteroAgent.experimentalAttachmentsEnabled";
 
@@ -844,7 +871,84 @@ function createEndpoint(registry, options = {}) {
   return Endpoint;
 }
 
-module.exports = {
-  createCommandRegistry,
-  createEndpoint
-};
+function getRuntimeContext() {
+  if (typeof Zotero === "undefined") {
+    return {};
+  }
+  return {
+    Zotero,
+    getPref: (prefName) => Zotero.Prefs.get(prefName)
+  };
+}
+
+function getRuntimeToken() {
+  if (typeof Zotero === "undefined" || !Zotero.Prefs) {
+    return "";
+  }
+  const value = Zotero.Prefs.get("extensions.zotero.zoteroAgent.token");
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function createHealthEndpoint(registry) {
+  function Endpoint() {}
+  Endpoint.prototype = {
+    supportedMethods: ["GET"],
+    supportedDataTypes: "*",
+    init: async function () {
+      try {
+        return contract.success("health.get", await registry["health.get"]());
+      } catch (error) {
+        return contract.failure(error);
+      }
+    }
+  };
+  return Endpoint;
+}
+
+function registerRuntimeEndpoints() {
+  if (typeof Zotero === "undefined" || !Zotero.Server) {
+    return;
+  }
+  const registry = createCommandRegistry(getRuntimeContext());
+  Zotero.Server.init();
+  Zotero.Server.Endpoints["/agent/command"] = createEndpoint(registry, {
+    tokenSource: getRuntimeToken
+  });
+  Zotero.Server.Endpoints["/agent/health"] = createHealthEndpoint(registry);
+  registeredPaths = ["/agent/command", "/agent/health"];
+}
+
+function unregisterRuntimeEndpoints() {
+  if (typeof Zotero === "undefined" || !Zotero.Server?.Endpoints) {
+    return;
+  }
+  for (const path of registeredPaths) {
+    delete Zotero.Server.Endpoints[path];
+  }
+  registeredPaths = [];
+}
+
+function install() {}
+
+function startup(addonData) {
+  addonRootURI = addonData?.rootURI || null;
+  cachedContract = null;
+  registerRuntimeEndpoints();
+}
+
+function shutdown() {
+  unregisterRuntimeEndpoints();
+}
+
+function uninstall() {}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    createCommandRegistry,
+    createEndpoint,
+    install,
+    startup,
+    shutdown,
+    uninstall
+  };
+}

@@ -3,10 +3,11 @@
 ## Quick start
 
 1. Build the plugin XPI with `npm run build:xpi`.
-2. Install the generated XPI in Zotero from `Tools -> Plugins -> gear -> Install Add-on From File...`.
-3. Set the local token in Zotero using `plugin/prefs.js.template` as the source of truth.
-4. Export the same token in your shell as `ZOTERO_AGENT_TOKEN`.
-5. Use `python3 scripts/zotero_cli.py --help` or `sh bin/zotero --help` to drive the local API.
+2. Install `builds/zotero-local-agent-management.xpi` in Zotero from `Tools -> Plugins -> gear -> Install Add-on From File...`.
+3. Generate a local token with `npm run make-token`.
+4. Set the same token in Zotero using `plugin/prefs.js.template` as the source of truth.
+5. Export the same token in your shell as `ZOTERO_AGENT_TOKEN`.
+6. Use `python3 scripts/zotero_cli.py --help` or `sh bin/zotero --help` to drive the local API.
 
 ## Skill
 
