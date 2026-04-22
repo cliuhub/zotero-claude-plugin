@@ -68,6 +68,31 @@ test("createEndpoint returns a not-found failure for unknown commands", async ()
   ]);
 });
 
+test("createEndpoint rejects prototype-name commands instead of dispatching them", async () => {
+  const bootstrap = require("../plugin/bootstrap.js");
+  const registry = {};
+  const Endpoint = bootstrap.createEndpoint(registry, { expectedToken: "real-token" });
+  const endpoint = new Endpoint();
+
+  const response = await endpoint.init({
+    headers: { "x-zotero-agent-token": "real-token" },
+    data: { command: "constructor", args: { limit: 5 } }
+  });
+
+  assert.deepEqual(response, [
+    404,
+    { "Content-Type": "application/json" },
+    JSON.stringify({
+      ok: false,
+      error: {
+        code: "NOT_FOUND",
+        message: "Unknown command: constructor",
+        details: {}
+      }
+    })
+  ]);
+});
+
 test("authorize accepts the configured token", () => {
   assert.doesNotThrow(() => {
     contract.authorizeHeaders({ "x-zotero-agent-token": "secret" }, "secret");

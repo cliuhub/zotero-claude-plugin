@@ -27,6 +27,7 @@ function resolveExpectedToken(options = {}) {
 
 function createEndpoint(registry, options = {}) {
   const expectedToken = resolveExpectedToken(options);
+  const hasOwn = Object.prototype.hasOwnProperty.call.bind(Object.prototype.hasOwnProperty);
 
   function Endpoint() {}
   Endpoint.prototype = {
@@ -36,7 +37,7 @@ function createEndpoint(registry, options = {}) {
       try {
         contract.authorizeHeaders(request.headers, expectedToken);
         const normalized = contract.normalizeCommandRequest(request.data || {});
-        const handler = registry[normalized.command];
+        const handler = hasOwn(registry, normalized.command) ? registry[normalized.command] : undefined;
         if (!handler) {
           throw new contract.CommandValidationError(404, "NOT_FOUND", `Unknown command: ${normalized.command}`);
         }
